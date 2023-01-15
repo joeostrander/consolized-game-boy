@@ -10,9 +10,9 @@ Notable changes:
  - 3x scale maintaining aspect ratio
  - Option to enable scanlines, pixel effect, etc.
  - The Color scheme, border, effects can be changed via a menu overlay
- - V3 SGB Cart version fits inside a NESPi case
+ - MODEL_B version fits inside a NESPi case, with SGB Cart rev, the cartridge fits all the way in
  - Custom PCBs
- - With Version 3 PCB, you won't need a functioning Gameboy motherboard.  You just need a good CPU and RAM (you could even use CPU/RAM from a Super Gameboy SNES/Famicom cartridge)
+ - With MODEL_B PCB, you won't need a functioning Gameboy motherboard.  You just need a good CPU and RAM (you could even use CPU/RAM from a Super Gameboy SNES/Famicom cartridge)
  
 
 ![preview](https://github.com/joeostrander/consolized-game-boy/blob/main/images/preview.png?raw=true)

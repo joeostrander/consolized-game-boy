@@ -24,6 +24,15 @@ if (TARGET pico_scanvideo_dpi)
         -DPICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS=500
         )
 
+    # RGB222
+    add_compile_definitions(PICO_SCANVIDEO_COLOR_PIN_COUNT=6)    # scanvideo_base.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_RSHIFT=4)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_GSHIFT=2)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_BSHIFT=0)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_RCOUNT=2)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_GCOUNT=2)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_BCOUNT=2)   # scanvideo.h
+
     target_link_libraries(gb_vga PRIVATE
             pico_multicore
             pico_stdlib

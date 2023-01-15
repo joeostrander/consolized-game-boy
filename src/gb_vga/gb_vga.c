@@ -1,11 +1,10 @@
-// TODO
-//  save settings???
-
-/*
- * Copyright (c) 2021 Raspberry Pi (Trading) Ltd.
- *
- * SPDX-License-Identifier: BSD-3-Clause
- */
+/* 
+    Authors: 
+        Andy West (original code)
+        Joe Ostrander
+    
+    https://github.com/joeostrander/consolized-game-boy
+*/
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,47 +20,16 @@
 #include "osd.h"
 #include "hardware/i2c.h"
 
-#define NES_CLASSIC_CONTROLLER
 #define SDA_PIN     12
 #define SCL_PIN     13
 #define I2C_ADDRESS 0x52
 i2c_inst_t* i2cHandle = i2c0;
 
-// #define VGA_213x160_TEST
-#ifdef VGA_213x160_TEST
-#define VGA_MODE vga_mode_213x160_60
-#else
 #define VGA_MODE vga_mode_640x480_60
-#endif
 #define MIN_RUN 3
 
 #define ONBOARD_LED_PIN         25
 
-// INPUTS (NES Controller, color change pin)
-#define DATA_PIN                8
-#define LATCH_PIN               9
-#define PULSE_PIN               10
-
-//#define PCB_V1
-#define PCB_V3
-
-#ifdef PCB_V1
-// GAMEBOY VIDEO INPUT (From level shifter)
-#define VSYNC_PIN               19
-#define HSYNC_PIN               15
-#define PIXEL_CLOCK_PIN         18
-#define DATA_1_PIN              16
-#define DATA_0_PIN              17
-
-#define BUTTONS_DPAD_PIN        21      // P14
-#define BUTTONS_OTHER_PIN       20      // P15
-#define BUTTONS_LEFT_B_PIN      28
-#define BUTTONS_DOWN_START_PIN  27
-#define BUTTONS_UP_SELECT_PIN   26
-#define BUTTONS_RIGHT_A_PIN     22
-
-#define GAMEBOY_RESET_PIN       11
-#else   // PCB_V3
 // GAMEBOY VIDEO INPUT (From level shifter)
 #define VSYNC_PIN               18
 #define HSYNC_PIN               17
@@ -77,21 +45,14 @@ i2c_inst_t* i2cHandle = i2c0;
 #define BUTTONS_RIGHT_A_PIN     27      // P10
 
 #define GAMEBOY_RESET_PIN       28
-#endif
 
 #define PIXELS_X                (160)
 #define PIXELS_Y                (144)
-#ifdef VGA_213x160_TEST
-// Game area will be 160x144, but can't do scanlines, etc.
-#define PIXEL_SCALE             (1)
-#define BORDER_HORZ             (26)    
-#define BORDER_VERT             (8)
-#else
+
 // Game area will be 480x432 
 #define PIXEL_SCALE             (3)
 #define BORDER_HORZ             (80)    
 #define BORDER_VERT             (24)
-#endif
 
 #define PIXEL_COUNT             (PIXELS_X*PIXELS_Y)
 
@@ -119,6 +80,7 @@ typedef enum
     BUTTON_DOWN,
     BUTTON_LEFT,
     BUTTON_RIGHT,
+    BUTTON_HOME,
     BUTTON_COUNT
 } controller_button_t;
 
@@ -145,9 +107,9 @@ static semaphore_t video_initted;
 static volatile uint8_t button_states[BUTTON_COUNT];
 static uint8_t button_states_previous[BUTTON_COUNT];
 static volatile uint8_t buttons_state = 0xFF;
-static int color_offset = 0;
-static int scanline_color_offset = 0;
-static int video_effect = VIDEO_EFFECT_NONE;
+static int8_t scheme_offset = 0;
+static int8_t scanline_color_offset = 0;
+static int8_t video_effect = VIDEO_EFFECT_NONE;
 
 static uint8_t framebuffer[PIXEL_COUNT];
 static uint8_t osd_framebuffer[OSD_HEIGHT*OSD_WIDTH] = {0};
@@ -387,10 +349,9 @@ static void core1_func(void);
 static void render_scanline(scanvideo_scanline_buffer_t *buffer);
 static void initialize_gpio(void);
 static void video_stuff(void);
-static void nes_controller(void);
 static void nes_classic_controller(void);
 static void gpio_callback(uint gpio, uint32_t events);
-static void change_color_offset(int direction);
+static void change_scheme_offset(int direction);
 static void change_border_color_index(int direction);
 static void change_video_effect(int increment);
 static void change_scanline_color(int increment);
@@ -401,7 +362,6 @@ static long map(long x, long in_min, long in_max, long out_min, long out_max);
 static void set_indexes(void);
 static void update_osd(void);
 static void gameboy_reset(void);
-//static void blink();
 
 int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color);
 int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y);
@@ -441,11 +401,7 @@ int main(void)
     while (true) 
     {
         video_stuff();
-#ifdef NES_CLASSIC_CONTROLLER
         nes_classic_controller();
-#else
-        nes_controller();
-#endif
         command_check();
     }
 }
@@ -528,7 +484,7 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
         {
             if (x == 0 && i == 0)
             {
-                *first_pixel = colors[*(pbuff) + color_offset];
+                *first_pixel = colors[*(pbuff) + scheme_offset];
             }
             else
             {
@@ -545,7 +501,7 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t mapped_y)
                     }
                     else
                     {
-                        color = colors[*(pbuff) + (uint8_t)color_offset]; 
+                        color = colors[*(pbuff) + (uint8_t)scheme_offset]; 
                     }
                 }
 
@@ -669,8 +625,6 @@ static void initialize_gpio(void)
     gpio_init(DATA_1_PIN);
     gpio_init(HSYNC_PIN);
 
-#ifdef NES_CLASSIC_CONTROLLER
-
     // UART, for testing
     //stdio_init_all();
 
@@ -683,26 +637,6 @@ static void initialize_gpio(void)
     gpio_pull_up(SCL_PIN);
     gpio_pull_up(SDA_PIN);
 
-#else
-    /* NES Controller - start */
-
-    /* Clock, normally HIGH */
-    gpio_init(PULSE_PIN);
-    gpio_set_dir(PULSE_PIN, GPIO_OUT);
-    gpio_put(PULSE_PIN, 1);
-    
-    /* Latch, normally LOW */
-    gpio_init(LATCH_PIN);
-    gpio_set_dir(LATCH_PIN, GPIO_OUT);
-    gpio_put(LATCH_PIN, 0);
-    
-    /* Data, reads normally high */
-    gpio_init(DATA_PIN);
-    gpio_set_dir(DATA_PIN, GPIO_IN);
-
-    /* NES Controller - end */
-#endif
-    
     gpio_init(BUTTONS_RIGHT_A_PIN);
     gpio_set_dir(BUTTONS_RIGHT_A_PIN, GPIO_OUT);
     gpio_put(BUTTONS_RIGHT_A_PIN, 1);
@@ -724,46 +658,6 @@ static void initialize_gpio(void)
 
     gpio_init(BUTTONS_OTHER_PIN);
     gpio_set_dir(BUTTONS_OTHER_PIN, GPIO_IN);
-}
-
-// static void blink()
-// {
-//     static bool state = true;
-//     static uint32_t last_us = 0;
-//     uint32_t current_us = time_us_32();
-//     if (current_us - last_us > 200000)
-//     {
-//         state = !state;
-//         gpio_put(ONBOARD_LED_PIN, state);
-//         last_us = current_us;
-//     }
-// }
-
-static void nes_controller(void)
-{
-    static uint32_t last_micros = 0;
-    uint32_t current_micros = time_us_32();
-    if (current_micros - last_micros < 20000)
-        return;
-
-    last_micros = current_micros;
-
-    gpio_put(LATCH_PIN, 1);
-    sleep_us(5);
-    gpio_put(LATCH_PIN, 0);
-    sleep_us(1);
-    button_states[0] = gpio_get(DATA_PIN);
-    sleep_us(4);
-
-    for (uint i = 1; i < 8; i++) 
-    {
-        sleep_us(8);
-        gpio_put(PULSE_PIN, 0);
-        sleep_us(1);
-        gpio_put(PULSE_PIN, 1);
-        sleep_us(8);
-        button_states[i] = gpio_get(DATA_PIN);
-    }
 }
 
 static void nes_classic_controller(void)
@@ -810,7 +704,7 @@ static void nes_classic_controller(void)
     uint8_t i;
     for (i = 0; i < 8; i++)
     {
-        if (i2c_buffer[i] != 0xFF)
+        if ((i < 4) && (i2c_buffer[i] != 0xFF))
             valid = true;
 
         if (valid)
@@ -821,6 +715,8 @@ static void nes_classic_controller(void)
                 button_states[BUTTON_SELECT] = (~i2c_buffer[i] & (1<<4)) > 0 ? 0 : 1;
                 button_states[BUTTON_DOWN] = (~i2c_buffer[i] & (1<<6)) > 0 ? 0 : 1;
                 button_states[BUTTON_RIGHT] = (~i2c_buffer[i] & (1<<7)) > 0 ? 0 : 1;
+
+                button_states[BUTTON_HOME] = (~i2c_buffer[i] & (1<<3)) > 0 ? 0 : 1;
             }
             else if (i == 5)
             {
@@ -855,8 +751,6 @@ static void gpio_callback(uint gpio, uint32_t events)
     // Prevent controller input to game if OSD is visible
     if (OSD_is_enabled())
         return;
-
-    //blink();
 
     if(gpio==BUTTONS_DPAD_PIN)
     {
@@ -897,12 +791,12 @@ static void gpio_callback(uint gpio, uint32_t events)
     }
 }
 
-static void change_color_offset(int direction)
+static void change_scheme_offset(int direction)
 {
     int max_offset = sizeof(colors)/sizeof(colors[0]) - 4;
-    color_offset += direction * 4;
-    color_offset = color_offset > max_offset ? 0 : color_offset;
-    color_offset = color_offset < 0 ? max_offset : color_offset;
+    scheme_offset += direction * 4;
+    scheme_offset = scheme_offset > max_offset ? 0 : scheme_offset;
+    scheme_offset = scheme_offset < 0 ? max_offset : scheme_offset;
 }
 
 static void change_border_color_index(int direction)
@@ -914,9 +808,6 @@ static void change_border_color_index(int direction)
 
 static void change_video_effect(int increment)
 {
-#ifdef VGA_213x160_TEST
-return;
-#endif
     video_effect += increment;
     video_effect = video_effect >= VIDEO_EFFECT_COUNT ? VIDEO_EFFECT_NONE : video_effect;
     video_effect = video_effect < 0 ? VIDEO_EFFECT_COUNT-1 : video_effect;
@@ -927,7 +818,7 @@ static void change_scanline_color(int increment)
     scanline_color_offset += increment;
     scanline_color_offset = scanline_color_offset > 3 ? 0 : scanline_color_offset;
     scanline_color_offset = scanline_color_offset < 0 ? 3 : scanline_color_offset;
-    scanline_color = colors[color_offset + scanline_color_offset];
+    scanline_color = colors[scheme_offset + scanline_color_offset];
 }
 
 static bool button_is_pressed(controller_button_t button)
@@ -942,17 +833,13 @@ static bool button_was_released(controller_button_t button)
 
 static void command_check(void)
 {
-    if (button_is_pressed(BUTTON_SELECT))
+    // Home pressed
+    if (button_was_released(BUTTON_HOME))
     {
-        // select pressed
-        if (button_was_released(BUTTON_START))
-        {
-            OSD_toggle();
-        }
+        OSD_toggle();
     }
     else
     {
-        // select not pressed
         if (OSD_is_enabled())
         {
             if (button_was_released(BUTTON_DOWN))
@@ -971,7 +858,7 @@ static void command_check(void)
                 switch (OSD_get_active_line())
                 {
                     case OSD_LINE_COLOR_SCHEME:
-                        change_color_offset(leftbtn ? -1 : 1);
+                        change_scheme_offset(leftbtn ? -1 : 1);
                         update_osd();
                         break;
                     case OSD_LINE_BORDER_COLOR:
@@ -1032,13 +919,12 @@ static void set_indexes(void)
 static void update_osd(void)
 {
     char buff[32];
-    sprintf(buff, "COLOR SCHEME:% 5d", color_offset/4);
+    sprintf(buff, "COLOR SCHEME:% 5d", scheme_offset/4);
     OSD_set_line_text(OSD_LINE_COLOR_SCHEME, buff);
 
     sprintf(buff, "BORDER COLOR:% 5d", border_color_index);
     OSD_set_line_text(OSD_LINE_BORDER_COLOR, buff);
 
-#ifndef VGA_213x160_TEST
     if (video_effect==VIDEO_EFFECT_SCANLINES)
     {
         sprintf(buff, "EFFECTS: SCANLINES");
@@ -1055,7 +941,6 @@ static void update_osd(void)
 
     sprintf(buff, "FX SCHEME:% 8d", scanline_color_offset);
     OSD_set_line_text(OSD_LINE_FX_SCHEME, buff);
-#endif
 
     OSD_set_line_text(OSD_LINE_RESET_GAMEBOY, "RESET GAMEBOY");
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
