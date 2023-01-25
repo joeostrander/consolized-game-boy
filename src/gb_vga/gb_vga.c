@@ -2,7 +2,9 @@
     Authors: 
         Andy West (original code)
         Joe Ostrander
-    
+
+    Version: 2.0.0
+
     https://github.com/joeostrander/consolized-game-boy
 */
 
@@ -107,9 +109,9 @@ static semaphore_t video_initted;
 static volatile uint8_t button_states[BUTTON_COUNT];
 static uint8_t button_states_previous[BUTTON_COUNT];
 static volatile uint8_t buttons_state = 0xFF;
-static int8_t scheme_offset = 0;
-static int8_t scanline_color_offset = 0;
-static int8_t video_effect = VIDEO_EFFECT_NONE;
+static int scheme_offset = 0;
+static int scanline_color_offset = 0;
+static int video_effect = VIDEO_EFFECT_NONE;
 
 static uint8_t framebuffer[PIXEL_COUNT];
 static uint8_t osd_framebuffer[OSD_HEIGHT*OSD_WIDTH] = {0};
