@@ -16,6 +16,7 @@ pico_sdk_init()
 if (TARGET pico_scanvideo_dpi)
     add_executable(gb_vga
             osd.c
+            colors.c
             )
 
     target_sources(gb_vga PRIVATE gb_vga.c)
@@ -32,6 +33,12 @@ if (TARGET pico_scanvideo_dpi)
     add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_RCOUNT=2)   # scanvideo.h
     add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_GCOUNT=2)   # scanvideo.h
     add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_BCOUNT=2)   # scanvideo.h
+
+    # add_compile_definitions(PICO_SCANVIDEO_ENABLE_CLOCK_PIN=1)
+    # add_compile_definitions(PICO_SCANVIDEO_ENABLE_DEN_PIN=1)
+    # add_compile_definitions(PICO_SCANVIDEO_CLOCK_PIN=9)
+    # add_compile_definitions(PICO_SCANVIDEO_SYNC_PIN_BASE=6)
+    # add_compile_definitions(PICO_SCANVIDEO_HSYNC_PIN_OFFSET=0 PICO_SCANVIDEO_VSYNC_PIN_OFFSET=1 PICO_SCANVIDEO_DEN_PIN_OFFSET=2)
 
     target_link_libraries(gb_vga PRIVATE
             pico_multicore

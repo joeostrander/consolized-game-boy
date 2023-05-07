@@ -1,3 +1,10 @@
+2023.05.07 v2.1.0
+- Removed pixel & scanline effects -- they were cheesy
+- Changed code to use scanvideo built-in video mode scaling, eliminating the need to manually scale
+- Changed Gameboy video scanning to use gpio interrupt on vsync instead of polling 
+- moved color/scheme stuff to colors.c
+- stopped overclocking
+
 2023.01.15 
-Original NES Controller no longer supported in code, but I'll leave the uf2 here for it...
-OSD now activated with HOME button on the Wii/NES Classic controller
+- Original NES Controller no longer supported in code, but I'll leave the uf2 here for it...
+- OSD now activated with HOME button on the Wii/NES Classic controller

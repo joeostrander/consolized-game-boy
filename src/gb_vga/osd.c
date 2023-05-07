@@ -1,11 +1,13 @@
 #include "osd.h"
 #include <string.h>
+#include <stdint.h>
 
-static uint8_t osd_pixel_buff[OSD_CHARS_PER_LINE];
+static uint8_t osd_pixel_buff[OSD_CHARS_PER_LINE];   // TODO:  OSD_get_pixel_buff?
 static char osd_text[OSD_LINES][OSD_CHARS_PER_LINE+1];
 static bool osd_enabled = false;
 static int active_line = 0;
-static uint8_t* framebuffer = NULL;
+//static uint8_t* framebuffer = NULL;
+static uint8_t framebuffer[OSD_HEIGHT*OSD_WIDTH] = {0};
 
 typedef struct 
 {
@@ -595,16 +597,8 @@ void OSD_set_line_text(uint8_t line_index, const char* text)
     osd_text[line_index][OSD_CHARS_PER_LINE] = '\0';
 }
 
-void OSD_init(uint8_t* buffer)
+void OSD_update(void)
 {
-    framebuffer = buffer;
-}
-
-void OSD_update_framebuffer(void)
-{
-    if (framebuffer == NULL)
-        return;
-
     int pos = 0;
     uint8_t color1 = 0x00;
     uint8_t color2 = 0x3C;
@@ -632,30 +626,30 @@ void OSD_update_framebuffer(void)
     }
 }
 
-uint8_t OSD_get_width(void)
-{
-    return OSD_WIDTH;
-}
+// uint8_t OSD_get_width(void)
+// {
+//     return OSD_WIDTH;
+// }
 
-uint8_t OSD_get_height(void)
-{
-    return OSD_HEIGHT;
-}
+// uint8_t OSD_get_height(void)
+// {
+//     return OSD_HEIGHT;
+// }
 
-uint8_t OSD_get_char_width(void)
-{
-    return OSD_CHAR_WIDTH;
-}
+// uint8_t OSD_get_char_width(void)
+// {
+//     return OSD_CHAR_WIDTH;
+// }
 
-uint8_t OSD_get_char_height(void)
-{
-    return OSD_CHAR_HEIGHT;
-}
+// uint8_t OSD_get_char_height(void)
+// {
+//     return OSD_CHAR_HEIGHT;
+// }
 
-uint8_t OSD_get_line_count(void)
-{
-    return OSD_LINES;
-}
+// uint8_t OSD_get_line_count(void)
+// {
+//     return OSD_LINES;
+// }
 
 void OSD_change_line(int direction)
 {
@@ -663,12 +657,26 @@ void OSD_change_line(int direction)
     active_line = active_line >= OSD_LINES ? 0 : active_line;
     active_line = active_line < 0 ? OSD_LINES-1 : active_line;
 
-    OSD_update_framebuffer();
+    OSD_update();
 }
 
-int OSD_get_active_line(void)
+uint8_t OSD_get_active_line(void)
 {
-    return active_line;
+    return (uint8_t)active_line;
+}
+
+uint8_t OSD_get_pixel(uint8_t x, uint8_t y)
+{
+    int pos = x + (y * OSD_WIDTH);
+    if (pos >= sizeof(framebuffer))
+        return 0;
+
+    return framebuffer[pos];
+}
+
+uint8_t* OSD_get_framebuffer(void)
+{
+    return framebuffer;
 }
 
 //**********************************************************************************************
