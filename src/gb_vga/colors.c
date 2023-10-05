@@ -1,6 +1,8 @@
 #include "colors.h"
 #include "pico/scanvideo.h"
 
+#define REVERSE_VGA_BITS    // I had the high bit/low bit backwards on Pico.. will fix in next PCB rev
+
 static color_scheme_t color_schemes[NUMBER_OF_SCHEMES] = 
 {
     [SCHEME_BLACK_AND_WHITE] =  { 0xF7F3F7, 0xB5B2B5, 0x4E4C4E, 0x000000 },
@@ -103,6 +105,19 @@ int get_scheme_index(void)
     return color_scheme_index;
 }
 
+#ifdef REVERSE_VGA_BITS
+uint16_t rgb888_to_rgb222(uint32_t color)
+{
+        uint32_t ret = 0;
+        ret = ((color & (1<<6)) >> 5);          //b1
+        ret = ret | ((color & (1<<7)) >> 7);    //b0
+        ret = ret | ((color & (1<<14)) >> 11);  //g1
+        ret = ret | ((color & (1<<15)) >> 13);  //g0
+        ret = ret | ((color & (1<<22)) >> 17);  //r1
+        ret = ret | ((color & (1<<23)) >> 19);  //r0
+        return (uint16_t)ret;
+}
+#else
 uint16_t rgb888_to_rgb222(uint32_t color)
 {
     uint32_t red = (color & 0xC00000) >> 22;
@@ -110,3 +125,5 @@ uint16_t rgb888_to_rgb222(uint32_t color)
     uint32_t blue = (color & 0xC0) >> 6;
     return (uint16_t)( ( blue<<PICO_SCANVIDEO_PIXEL_BSHIFT ) |( green<<PICO_SCANVIDEO_PIXEL_GSHIFT ) |( red<<PICO_SCANVIDEO_PIXEL_RSHIFT ) );
 }
+}
+#endif

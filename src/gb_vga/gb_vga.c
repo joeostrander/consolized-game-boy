@@ -3,7 +3,7 @@
         Andy West (original code)
         Joe Ostrander
 
-    Version: 2.1.0
+    Version: 2.1.1
 
     https://github.com/joeostrander/consolized-game-boy
 */
@@ -32,6 +32,7 @@ i2c_inst_t* i2cHandle = i2c0;
 #define MIN_RUN 3
 
 #define ONBOARD_LED_PIN             25
+//#define DEBUG_BUTTON_PRESS
 
 // GAMEBOY VIDEO INPUT (From level shifter)
 #define VSYNC_PIN                   18
@@ -532,6 +533,7 @@ static bool nes_classic_controller(void)
         last_micros = time_us_32();
     }
 
+#ifdef DEBUG_BUTTON_PRESS
     uint8_t buttondown = 0;
     for (i = 0; i < BUTTON_COUNT; i++)
     {
@@ -541,6 +543,7 @@ static bool nes_classic_controller(void)
         }
     }
     gpio_put(ONBOARD_LED_PIN, buttondown);
+#endif
 
     return true;
 }
@@ -610,49 +613,64 @@ static void __no_inline_not_in_flash_func(command_check)(void)
     if (memcmp(button_states, button_states_previous, sizeof(button_states)) == 0)
         return;
 
-    // Home pressed
-    if (button_was_released(BUTTON_HOME))
+
+    if (button_is_pressed(BUTTON_SELECT))
     {
-        OSD_toggle();
+        // select pressed
+        if (button_was_released(BUTTON_START))
+        {
+            OSD_toggle();
+        }
     }
     else
     {
-        if (OSD_is_enabled())
+        // select not pressed
+        
+        if (button_was_released(BUTTON_HOME))   
         {
-            if (button_was_released(BUTTON_DOWN))
+            OSD_toggle();
+        }
+        else
+        {
+            if (OSD_is_enabled())
             {
-                OSD_change_line(1);
-            }
-            else if (button_was_released(BUTTON_UP))
-            {
-                OSD_change_line(-1);
-            }
-            else if (button_was_released(BUTTON_RIGHT) 
-                    || button_was_released(BUTTON_LEFT)
-                    || button_was_released(BUTTON_A))
-            {
-                bool leftbtn = button_was_released(BUTTON_LEFT);
-                switch (OSD_get_active_line())
+                if (button_was_released(BUTTON_DOWN))
                 {
-                    case OSD_LINE_COLOR_SCHEME:
-                        change_color_scheme_index(leftbtn ? -1 : 1);
-                        color_scheme = get_scheme();
-                        update_osd();
-                        break;
-                    case OSD_LINE_BORDER_COLOR:
-                        change_border_color_index(leftbtn ? -1 : 1);
-                        background_color = rgb888_to_rgb222(get_background_color());
-                        update_osd();
-                        break;
-                    case OSD_LINE_RESET_GAMEBOY:
-                        gameboy_reset();
-                        break;
-                    case OSD_LINE_EXIT:
-                        OSD_toggle();
-                        break;
+                    OSD_change_line(1);
+                }
+                else if (button_was_released(BUTTON_UP))
+                {
+                    OSD_change_line(-1);
+                }
+                else if (button_was_released(BUTTON_RIGHT) 
+                        || button_was_released(BUTTON_LEFT)
+                        || button_was_released(BUTTON_A))
+                {
+                    bool leftbtn = button_was_released(BUTTON_LEFT);
+                    switch (OSD_get_active_line())
+                    {
+                        case OSD_LINE_COLOR_SCHEME:
+                            change_color_scheme_index(leftbtn ? -1 : 1);
+                            color_scheme = get_scheme();
+                            update_osd();
+                            break;
+                        case OSD_LINE_BORDER_COLOR:
+                            change_border_color_index(leftbtn ? -1 : 1);
+                            background_color = rgb888_to_rgb222(get_background_color());
+                            update_osd();
+                            break;
+                        case OSD_LINE_RESET_GAMEBOY:
+                            gameboy_reset();
+                            break;
+                        case OSD_LINE_EXIT:
+                            OSD_toggle();
+                            break;
+                    }
                 }
             }
         }
+
+        
     }
     
     for (int i = 0; i < BUTTON_COUNT; i++) 
