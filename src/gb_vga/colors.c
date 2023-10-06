@@ -125,5 +125,4 @@ uint16_t rgb888_to_rgb222(uint32_t color)
     uint32_t blue = (color & 0xC0) >> 6;
     return (uint16_t)( ( blue<<PICO_SCANVIDEO_PIXEL_BSHIFT ) |( green<<PICO_SCANVIDEO_PIXEL_GSHIFT ) |( red<<PICO_SCANVIDEO_PIXEL_RSHIFT ) );
 }
-}
 #endif
