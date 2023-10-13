@@ -7,7 +7,7 @@
 
 #define OSD_CHAR_WIDTH      (7)
 #define OSD_CHAR_HEIGHT     (8)
-#define OSD_LINES           (4)
+#define OSD_LINES           (5)
 #define OSD_CHARS_PER_LINE  (18)
 #define OSD_HEIGHT          (OSD_LINES*OSD_CHAR_HEIGHT)
 #define OSD_WIDTH           (OSD_CHAR_WIDTH*OSD_CHARS_PER_LINE)
