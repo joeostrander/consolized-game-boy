@@ -1,3 +1,8 @@
+2023.10.05 v2.2.0
+- re-adding old-school nes controller support (disabled in firmware, but option is in code)
+- reordering the color schemes
+- adding OSD line option to reverse RGB bits
+
 2023.10.05 v2.1.1
 - Turns out I had bit order reversed on VGA.  One option would have been to swap resistors for bit 6/7 of each color channel... instead I decided to swap bits in code.
 - disabling the onboard LED blink on button press
