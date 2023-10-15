@@ -1,3 +1,6 @@
+2023.10.15 v2.3.0
+- added the ability to save settings 
+
 2023.10.05 v2.2.0
 - re-adding old-school nes controller support (disabled in firmware, but option is in code)
 - reordering the color schemes
