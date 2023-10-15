@@ -58,9 +58,12 @@ static uint32_t basic_colors[NUMBER_OF_COLORS] =
     [COLOR_PURPLE]      = 0xFF00FF
 };
 
-static int border_color_index = 0;
+static int border_color_index = COLOR_BLACK;
 static int color_scheme_index = SCHEME_BLACK_AND_WHITE;
 
+//**********************************************************************************************
+// PUBLIC FUNCTIONS
+//**********************************************************************************************
 uint32_t get_basic_color(uint8_t index)
 {
     return basic_colors[index];
@@ -76,12 +79,12 @@ int get_border_color_index(void)
     return border_color_index;
 }
 
-void change_border_color_index(int direction)
+void increase_border_color_index(int direction)
 {
-    set_background_color(border_color_index + direction);
+    set_border_color_index(border_color_index + direction);
 }
 
-void set_background_color(int index)
+void set_border_color_index(int index)
 {
     uint8_t max = sizeof(basic_colors)/sizeof(uint32_t) -1;
     border_color_index = index;
@@ -89,7 +92,7 @@ void set_background_color(int index)
     border_color_index = border_color_index > max ? 0 : border_color_index;
 }
 
-void change_color_scheme_index(int direction)
+void increase_color_scheme_index(int direction)
 {
     color_scheme_index += direction;
     color_scheme_index = color_scheme_index >= NUMBER_OF_SCHEMES ? 0 : color_scheme_index;
@@ -104,6 +107,13 @@ color_scheme_t* get_scheme(void)
 int get_scheme_index(void)
 {
     return color_scheme_index;
+}
+
+void set_scheme_index(int index)
+{
+    index = index >= NUMBER_OF_SCHEMES ? 0 : index;
+    index = index < 0 ? (NUMBER_OF_SCHEMES-1) : index;
+    color_scheme_index = index;
 }
 
 uint16_t rgb888_to_rgb222(uint32_t color)

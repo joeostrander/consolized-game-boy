@@ -1,9 +1,16 @@
 /* 
     Authors: 
-        Andy West (original code)
+        Andy West (original concept and code)
         Joe Ostrander
+            - conversion to single Pico (gpio callbacks, reduction to RGB222, etc.)
+            - on-screen display for custom settings
+            - I2C game controller code
+            - save settings to flash
+            - video mode conversion 4:3 + border
 
-    Version: 2.2
+        You too can contribute and I welcome any suggestions!
+
+    Version: 2.3
 
     https://github.com/joeostrander/consolized-game-boy
 */
@@ -23,6 +30,10 @@
 #include "osd.h"
 #include "hardware/i2c.h"
 #include "colors.h"
+#include "eeprom.h"
+#include "hardware/dma.h"
+#include "hardware/flash.h"
+#include "flash_utils.h"
 
 // #define USE_NES_CONTROLLER   // Uncomment to use old-school NES controller
 // #define DEBUG_BUTTON_PRESS   // Illuminate LED on button presses
@@ -63,6 +74,15 @@ i2c_inst_t* i2cHandle = i2c0;
 #define DMG_PIXELS_Y                144
 #define DMG_PIXEL_COUNT             (DMG_PIXELS_X*DMG_PIXELS_Y)
 
+//**********************************************************************************************
+// TYPEDEFS & STRUCTS
+//**********************************************************************************************
+typedef enum
+{
+    SAVE_INDEX_SCHEME = 0,
+    SAVE_INDEX_BORDER
+} save_position_t;
+
 typedef enum
 {
     BUTTON_A = 0,
@@ -81,7 +101,7 @@ typedef enum
 {
     OSD_LINE_COLOR_SCHEME = 0,
     OSD_LINE_BORDER_COLOR,
-    OSD_LINE_REVERSE_RGB_BITS,
+    OSD_LINE_SAVE_SETTINGS,
     OSD_LINE_RESET_GAMEBOY,
     OSD_LINE_EXIT,
     OSD_LINE_COUNT
@@ -100,6 +120,10 @@ typedef struct rectangle_t
     uint16_t width;
     uint16_t height;
 } rectangle_t;
+
+//**********************************************************************************************
+// PRIVATE VARIABLES
+//**********************************************************************************************
 
 const scanvideo_timing_t vga_timing_640x480_gb =
         {
@@ -149,8 +173,11 @@ static rectangle_t rect_gamewindow;
 static rectangle_t rect_osd;
 static uint16_t background_color;
 
-static void core1_func(void);
-static void render_scanline(scanvideo_scanline_buffer_t *buffer);
+//**********************************************************************************************
+// PRIVATE FUNCTION PROTOTYPES
+//**********************************************************************************************
+static void __no_inline_not_in_flash_func(core1_func)(void);
+static void __no_inline_not_in_flash_func(render_scanline)(scanvideo_scanline_buffer_t *dest);
 static void initialize_gpio(void);
 static bool nes_controller(void);
 static bool nes_classic_controller(void);
@@ -163,9 +190,12 @@ static long map(long x, long in_min, long in_max, long out_min, long out_max);
 static void update_osd(void);
 static void set_orientation(void);
 static void gameboy_reset(void);
+static void __no_inline_not_in_flash_func(save_settings)(void);
+static void load_settings(void);
+static void enable_core1(bool enable);
 
-int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color);
-int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t line_index);
+static int32_t __no_inline_not_in_flash_func(single_solid_line)(uint32_t *buf, size_t buf_length, uint16_t color);
+static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, size_t buf_length, uint8_t line_index);
 
 int main(void) 
 {
@@ -195,7 +225,8 @@ int main(void)
         button_states_previous[i] = BUTTON_STATE_UNPRESSED;
     }
 
-    set_background_color(COLOR_BLACK);
+    load_settings();
+
     background_color = rgb888_to_rgb222(get_background_color());
     color_scheme = get_scheme();
     
@@ -208,6 +239,7 @@ int main(void)
 
     while (true) 
     {
+
 #ifdef USE_NES_CONTROLLER
         if (nes_controller())
         {
@@ -229,14 +261,14 @@ static long map(long x, long in_min, long in_max, long out_min, long out_max)
 
 static void gpio_callback_VIDEO(uint gpio, uint32_t events)
 {
-//                  +-----------------------------------------+     
-// VSYNC -----------+                                         +-----------------------
-//                    +------+                                     +------+
-// HSYNC -------------+      +-------------------------------------+      +-----------
-//                      +-+     +-+ +-+ +-+ +-+ +-+ +-+ +-+ +-+      +-+     +-+ +-+ +
-// CLOCK ---------------+ +-----+ +-+ +-+ +-+ +-+ +-+ +-+ +-+ +------+ +-----+ +-+ +-+
-//       -------------+   +--+  ++ ++ +--+ ++ ++ +---------------+   +--+  ++ ++ +--+ 
-// DATA 0/1           +---+  +--++-++-+  +-++-++-+               +---+  +--++-++-+  +-
+//                  ┌─────────────────────────────────────────┐     
+// VSYNC ───────────┘                                         └───────────────────────
+//                    ┌──────┐                                     ┌──────┐
+// HSYNC ─────────────┘      └─────────────────────────────────────┘      └───────────
+//                      ┌─┐     ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐ ┌─┐      ┌─┐     ┌─┐ ┌─┐ ┌
+// CLOCK ───────────────┘ └─────┘ └─┘ └─┘ └─┘ └─┘ └─┘ └─┘ └─┘ └──────┘ └─────┘ └─┘ └─┘
+//       ─────────────┐   ┌──┐  ┌┐ ┌┐ ┌──┐ ┌┐ ┌┐ ┌───────────────┐   ┌──┐  ┌┐ ┌┐ ┌──┐ 
+// DATA 0/1           └───┘  └──┘└─┘└─┘  └─┘└─┘└─┘               └───┘  └──┘└─┘└─┘  └─
 
 
     if(gpio==VSYNC_PIN)
@@ -269,7 +301,7 @@ static void gpio_callback_VIDEO(uint gpio, uint32_t events)
     }
 }
 
-int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t line_index)
+static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, size_t buf_length, uint8_t line_index)
 {
     uint16_t* p16 = (uint16_t *) buf;
     uint16_t* first_pixel;
@@ -362,7 +394,7 @@ int32_t single_scanline(uint32_t *buf, size_t buf_length, uint8_t line_index)
     return ((uint32_t *) p16) - buf;
 }
 
-int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color)
+static int32_t __no_inline_not_in_flash_func(single_solid_line)(uint32_t *buf, size_t buf_length, uint16_t color)
 {
     uint16_t *p16 = (uint16_t *) buf;
 
@@ -379,7 +411,7 @@ int32_t single_solid_line(uint32_t *buf, size_t buf_length, uint16_t color)
     return ((uint32_t *) p16) - buf;
 }
 
-static void render_scanline(scanvideo_scanline_buffer_t *dest) 
+static void __no_inline_not_in_flash_func(render_scanline)(scanvideo_scanline_buffer_t *dest) 
 {
     uint32_t *buf = dest->data;
     size_t buf_length = dest->data_max;
@@ -399,10 +431,9 @@ static void render_scanline(scanvideo_scanline_buffer_t *dest)
     dest->status = SCANLINE_OK;
 }
 
-
-static void core1_func(void) 
+#define FLASH_SIZE_BYTES (XIP_BASE + XIP_SIZE_BYTES - FLASH_PAGE_SIZE)
+static void __no_inline_not_in_flash_func(core1_func)(void) 
 {
-    
     hard_assert(VGA_MODE.width + 4 <= PICO_SCANVIDEO_MAX_SCANLINE_BUFFER_WORDS * 2);    
 
     // Initialize video and interrupts on core 1.
@@ -412,6 +443,8 @@ static void core1_func(void)
 
     gpio_set_irq_enabled_with_callback(DMG_READING_DPAD_PIN, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
     gpio_set_irq_enabled_with_callback(DMG_READING_BUTTONS_PIN, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &gpio_callback);
+
+    multicore_lockout_victim_init();
 
     while (true) 
     {
@@ -729,17 +762,17 @@ static void __no_inline_not_in_flash_func(command_check)(void)
                     switch (OSD_get_active_line())
                     {
                         case OSD_LINE_COLOR_SCHEME:
-                            change_color_scheme_index(leftbtn ? -1 : 1);
+                            increase_color_scheme_index(leftbtn ? -1 : 1);
                             color_scheme = get_scheme();
                             update_osd();
                             break;
                         case OSD_LINE_BORDER_COLOR:
-                            change_border_color_index(leftbtn ? -1 : 1);
+                            increase_border_color_index(leftbtn ? -1 : 1);
                             background_color = rgb888_to_rgb222(get_background_color());
                             update_osd();
                             break;
-                        case OSD_LINE_REVERSE_RGB_BITS:
-                            reverse_rgb_bits_toggle();
+                        case OSD_LINE_SAVE_SETTINGS:
+                            save_settings();
                             update_osd();
                             break;
                         case OSD_LINE_RESET_GAMEBOY:
@@ -762,31 +795,6 @@ static void __no_inline_not_in_flash_func(command_check)(void)
     }
 }
 
-// static void set_indexes(void)
-// {
-//     int i;
-//     uint16_t n = 0;
-
-//     uint16_t x;
-//     for (x = 0; x < PIXELS_X; x++)
-//     {
-//         for (i = 0; i < PIXEL_SCALE; i++) 
-//         {
-//             indexes_x[n++] = x;
-//         }
-//     }
-
-//     n = 0;
-//     uint16_t y;
-//     for (y = 0; y < PIXELS_Y; y++)
-//     {
-//         for (i = 0; i < PIXEL_SCALE; i++) 
-//         {
-//             indexes_y[n++] = y;
-//         }
-//     }
-// }
-
 static void update_osd(void)
 {
     char buff[32];
@@ -796,20 +804,16 @@ static void update_osd(void)
     sprintf(buff, "BORDER COLOR:% 5d", get_border_color_index());
     OSD_set_line_text(OSD_LINE_BORDER_COLOR, buff);
 
-    sprintf(buff, "RGB BIT FLIP:% 5s", rgb_bit_reverse_state() ? "ON" :"OFF");
-    OSD_set_line_text(OSD_LINE_REVERSE_RGB_BITS, buff);
 
     OSD_set_line_text(OSD_LINE_RESET_GAMEBOY, "RESET GAMEBOY");
+    OSD_set_line_text(OSD_LINE_SAVE_SETTINGS, "SAVE & EXIT");
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
 
     OSD_update();
 }
 
-
 static void set_orientation(void)
 {
-//uint16_t border = ((VGA_MODE.width/VGA_MODE.xscale) - rect_gamewindow.width)/2;
-
     rect_gamewindow.width = DMG_PIXELS_X;
     rect_gamewindow.height = DMG_PIXELS_Y;
     rect_gamewindow.x = ((VGA_MODE.width/VGA_MODE.xscale) - rect_gamewindow.width)/2;
@@ -826,4 +830,58 @@ static void gameboy_reset(void)
     gpio_put(GAMEBOY_RESET_PIN, 0);
     sleep_ms(50);
     gpio_put(GAMEBOY_RESET_PIN, 1);
+}
+
+static void __no_inline_not_in_flash_func(save_settings)(void)
+{
+    enable_core1(false);
+    EEPROM_write(SAVE_INDEX_SCHEME, get_scheme_index());
+    EEPROM_write(SAVE_INDEX_BORDER, get_border_color_index());
+    bool ret = EEPROM_commit();
+    enable_core1(true);
+    if (ret)
+        OSD_toggle();
+}
+
+static void load_settings(void)
+{
+    enable_core1(false);
+    set_scheme_index((int)EEPROM_read(SAVE_INDEX_SCHEME));
+    set_border_color_index((int)EEPROM_read(SAVE_INDEX_BORDER));
+    enable_core1(true);
+}
+
+static void enable_core1(bool enable)
+{
+    // NOTE:
+    // multicore_lockout_start_blocking & multicore_lockout_end_blocking did not seem to be enough
+    // If you know a better way to do this, please let me know on element14.com @Joe_O or add a github issue
+
+    if (enable)
+    {
+        sem_reset(&video_initted, 0);
+        multicore_launch_core1(core1_func);
+        sem_acquire_blocking(&video_initted);
+    }
+    else
+    {
+        // Thanks to rumbledethumps for the code to kill pio/dma
+        // https://github.com/rumbledethumps
+        // https://github.com/picocomputer/rp6502/blob/main/src/vga/sys/vga.c
+        // Stop and release resources previously held by scanvideo_setup()
+        dma_channel_abort(0);
+        if (dma_channel_is_claimed(0))
+            dma_channel_unclaim(0);
+        pio_clear_instruction_memory(pio0);
+        // scanvideo_timing_enable is almost able to stop itself
+        for (int sm = 0; sm < 4; sm++)
+            if (pio_sm_is_claimed(pio0, sm))
+                pio_sm_unclaim(pio0, sm);
+        scanvideo_timing_enable(false);
+        for (int sm = 0; sm < 4; sm++)
+            if (pio_sm_is_claimed(pio0, sm))
+                pio_sm_unclaim(pio0, sm);
+
+        multicore_reset_core1();
+    }
 }

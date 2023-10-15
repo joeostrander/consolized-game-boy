@@ -79,11 +79,12 @@ typedef enum
 uint32_t get_basic_color(uint8_t index);
 uint32_t get_background_color(void);
 int get_border_color_index(void);
-void change_border_color_index(int direction);
-void set_background_color(int index);
-void change_color_scheme_index(int direction);
+void set_border_color_index(int index);
+void increase_border_color_index(int direction);
+void increase_color_scheme_index(int direction);
 color_scheme_t* get_scheme(void);
 int get_scheme_index(void);
+void set_scheme_index(int index);
 uint16_t rgb888_to_rgb222(uint32_t color);
 void reverse_rgb_bits_toggle(void);
 bool rgb_bit_reverse_state(void);
