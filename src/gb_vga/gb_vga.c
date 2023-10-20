@@ -10,7 +10,7 @@
 
         You too can contribute and I welcome any suggestions!
 
-    Version: 2.3
+    Version: 2.3.2
 
     https://github.com/joeostrander/consolized-game-boy
 */
@@ -676,7 +676,17 @@ static void gpio_callback(uint gpio, uint32_t events)
             gpio_put(DMG_OUTPUT_DOWN_START_PIN, button_states[BUTTON_DOWN]);
         }
 
-        //TODO: it might be best to read BUTTONS when this goes high
+        if (events & GPIO_IRQ_EDGE_RISE)   // Send BUTTON states on low
+        {
+            // When P15 pin goes high, read cycle is complete, send all high
+            if(gpio_get(DMG_READING_BUTTONS_PIN) == 1)
+            {
+                gpio_put(DMG_OUTPUT_RIGHT_A_PIN, 1);
+                gpio_put(DMG_OUTPUT_LEFT_B_PIN, 1);
+                gpio_put(DMG_OUTPUT_UP_SELECT_PIN, 1);
+                gpio_put(DMG_OUTPUT_DOWN_START_PIN, 1);
+            }
+        }
     }
 
     if(gpio==DMG_READING_BUTTONS_PIN)
@@ -697,15 +707,6 @@ static void gpio_callback(uint gpio, uint32_t events)
                 button_states[BUTTON_SELECT] = 1;
                 button_states[BUTTON_START] = 1;
             }
-        }
-
-        // When P15 pin goes high, read cycle is complete, send all high
-        if(events & GPIO_IRQ_EDGE_RISE)
-        {
-            gpio_put(DMG_OUTPUT_RIGHT_A_PIN, 1);
-            gpio_put(DMG_OUTPUT_LEFT_B_PIN, 1);
-            gpio_put(DMG_OUTPUT_UP_SELECT_PIN, 1);
-            gpio_put(DMG_OUTPUT_DOWN_START_PIN, 1);
         }
     }
 }
