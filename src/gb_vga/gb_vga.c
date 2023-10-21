@@ -10,7 +10,7 @@
 
         You too can contribute and I welcome any suggestions!
 
-    Version: 2.3.2
+    Version: 2.3.3
 
     https://github.com/joeostrander/consolized-game-boy
 */
@@ -575,7 +575,7 @@ static bool nes_classic_controller(void)
     static uint32_t last_micros = 0;
     uint32_t current_micros = time_us_32();
 
-    if (current_micros - last_micros < 5000)
+    if (current_micros - last_micros < 20000)
         return false;
     
     static bool initialized = false;
