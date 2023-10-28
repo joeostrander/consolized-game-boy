@@ -14,6 +14,10 @@
     Version: 2.4.0
 
     https://github.com/joeostrander/consolized-game-boy
+
+    Note about scanvideo:
+    When scaling, there is a bug in scanvideo.c that prevents line zero from repeating
+    see my fix --> https://github.com/joeostrander/pico-extras/commit/3ed9467f0203acd9bedfdbb08bed8f31b61b320c
 */
 
 #include <stdio.h>
