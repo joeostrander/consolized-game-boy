@@ -7,10 +7,11 @@
             - I2C game controller code
             - save settings to flash
             - video mode conversion 4:3 + border
+            - frame blending
 
         You too can contribute and I welcome any suggestions!
 
-    Version: 2.3.3
+    Version: 2.4.0
 
     https://github.com/joeostrander/consolized-game-boy
 */
@@ -34,6 +35,7 @@
 #include "hardware/dma.h"
 #include "hardware/flash.h"
 #include "flash_utils.h"
+#include "hardware/irq.h"
 
 // #define USE_NES_CONTROLLER   // Uncomment to use old-school NES controller
 // #define DEBUG_BUTTON_PRESS   // Illuminate LED on button presses
@@ -101,8 +103,9 @@ typedef enum
 {
     OSD_LINE_COLOR_SCHEME = 0,
     OSD_LINE_BORDER_COLOR,
-    OSD_LINE_SAVE_SETTINGS,
+    OSD_LINE_FRAMEBLENDING,
     OSD_LINE_RESET_GAMEBOY,
+    OSD_LINE_SAVE_SETTINGS,
     OSD_LINE_EXIT,
     OSD_LINE_COUNT
 } osd_line_t;
@@ -166,8 +169,12 @@ static uint8_t button_states[BUTTON_COUNT];
 static uint8_t button_states_previous[BUTTON_COUNT];
 static color_scheme_t* color_scheme;
 
-static uint8_t framebuffer[DMG_PIXEL_COUNT];
 static uint8_t* osd_framebuffer = NULL;
+static uint8_t framebuffer_active[DMG_PIXEL_COUNT] = {0};
+static uint8_t framebuffer_previous[DMG_PIXEL_COUNT] = {0};
+static uint8_t* pixel_active;
+static uint8_t* pixel_old;
+static bool frameblending_enabled = false;
 
 static rectangle_t rect_gamewindow;
 static rectangle_t rect_osd;
@@ -179,10 +186,10 @@ static uint16_t background_color;
 static void __no_inline_not_in_flash_func(core1_func)(void);
 static void __no_inline_not_in_flash_func(render_scanline)(scanvideo_scanline_buffer_t *dest);
 static void initialize_gpio(void);
-static bool nes_controller(void);
-static bool nes_classic_controller(void);
-static void gpio_callback(uint gpio, uint32_t events);
-static void gpio_callback_VIDEO(uint gpio, uint32_t events);
+static bool __no_inline_not_in_flash_func(nes_controller)(void);
+static bool __no_inline_not_in_flash_func(nes_classic_controller)(void);
+static void __no_inline_not_in_flash_func(gpio_callback)(uint gpio, uint32_t events);
+static void __no_inline_not_in_flash_func(gpio_callback_VIDEO)(uint gpio, uint32_t events);
 static void __no_inline_not_in_flash_func(command_check)(void);
 static bool button_is_pressed(controller_button_t button);
 static bool button_was_released(controller_button_t button);
@@ -193,6 +200,7 @@ static void gameboy_reset(void);
 static void __no_inline_not_in_flash_func(save_settings)(void);
 static void load_settings(void);
 static void enable_core1(bool enable);
+static void read_pixel(void);
 
 static int32_t __no_inline_not_in_flash_func(single_solid_line)(uint32_t *buf, size_t buf_length, uint16_t color);
 static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, size_t buf_length, uint8_t line_index);
@@ -235,11 +243,10 @@ int main(void)
 
     set_orientation();
     
-    gpio_set_irq_enabled_with_callback(VSYNC_PIN, GPIO_IRQ_EDGE_FALL | GPIO_IRQ_EDGE_RISE, true, &gpio_callback_VIDEO);
+    gpio_set_irq_enabled_with_callback(VSYNC_PIN, GPIO_IRQ_EDGE_RISE, true, &gpio_callback_VIDEO);
 
     while (true) 
     {
-
 #ifdef USE_NES_CONTROLLER
         if (nes_controller())
         {
@@ -259,7 +266,7 @@ static long map(long x, long in_min, long in_max, long out_min, long out_max)
   return (x - in_min) * (out_max - out_min) / (in_max - in_min) + out_min;
 }
 
-static void gpio_callback_VIDEO(uint gpio, uint32_t events)
+static void __no_inline_not_in_flash_func(gpio_callback_VIDEO)(uint gpio, uint32_t events)
 {
 //                  ┌─────────────────────────────────────────┐     
 // VSYNC ───────────┘                                         └───────────────────────
@@ -270,33 +277,34 @@ static void gpio_callback_VIDEO(uint gpio, uint32_t events)
 //       ─────────────┐   ┌──┐  ┌┐ ┌┐ ┌──┐ ┌┐ ┌┐ ┌───────────────┐   ┌──┐  ┌┐ ┌┐ ┌──┐ 
 // DATA 0/1           └───┘  └──┘└─┘└─┘  └─┘└─┘└─┘               └───┘  └──┘└─┘└─┘  └─
 
-
-    if(gpio==VSYNC_PIN)
-    {
-        // ignore falling edge interrupt
-        if (events & GPIO_IRQ_EDGE_FALL)
-            return;
-    }
-
     uint16_t x = 0;
     uint16_t y = 0;
-    uint32_t pos = 0;
+    pixel_active = framebuffer_active;
+    pixel_old = framebuffer_previous;
+    uint8_t state_clk;
+    uint8_t state_clk_last;
 
     for (y = 0; y < DMG_PIXELS_Y; y++)
     {
-        // wait for HSYNC edge to fall
+        // wait for HSYNC edge to rise & fall
         while (gpio_get(HSYNC_PIN) == 0);
         while (gpio_get(HSYNC_PIN) == 1);
-        for (x = 0; x < DMG_PIXELS_X; x++)   //DMG_PIXELS_X
+        // Grab first pixel just after HYSNC goes low
+        read_pixel();
+        
+        // Get remaining pixels on each falling edge of the clock
+        x = 1;
+        state_clk = gpio_get(PIXEL_CLOCK_PIN);
+        state_clk_last = state_clk;
+        while (x < DMG_PIXELS_X)
         {
-            pos = x + (y * rect_gamewindow.width);
-
-            if (pos < DMG_PIXEL_COUNT)
-                framebuffer[pos] = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
-
-            // wait for clock pulse to fall
-            while (gpio_get(PIXEL_CLOCK_PIN) == 0);
-            while (gpio_get(PIXEL_CLOCK_PIN) == 1);
+            state_clk = gpio_get(PIXEL_CLOCK_PIN);
+            if (state_clk == 0 && state_clk_last == 1)
+            {
+                read_pixel();
+                x++;
+            }
+            state_clk_last = state_clk;
         }
     }
 }
@@ -321,7 +329,7 @@ static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, siz
     *p16++ = 0; // replaced later - first pixel
     *p16++ = rect_gamewindow.width - MIN_RUN;
 
-    uint8_t *pbuff = &framebuffer[line_index * rect_gamewindow.width];
+    uint8_t *pbuff = &framebuffer_active[line_index * rect_gamewindow.width];
 
     uint16_t pos = 0;
     uint16_t x;
@@ -529,7 +537,7 @@ static void initialize_gpio(void)
     gpio_set_dir(DMG_READING_BUTTONS_PIN, GPIO_IN);
 }
 
-static bool nes_controller(void)
+static bool __no_inline_not_in_flash_func(nes_controller)(void)
 {
     static uint32_t last_micros = 0;
     uint32_t current_micros = time_us_32();
@@ -570,13 +578,15 @@ static bool nes_controller(void)
     return true;
 }
 
-static bool nes_classic_controller(void)
+static bool __no_inline_not_in_flash_func(nes_classic_controller)(void)
 {
     static uint32_t last_micros = 0;
     uint32_t current_micros = time_us_32();
 
-    if (current_micros - last_micros < 20000)
+    if (current_micros - last_micros < 20000)   // probably longer than it needs to be, NES Classic queries about every 5ms
         return false;
+
+    gpio_set_irq_enabled(VSYNC_PIN, GPIO_IRQ_EDGE_RISE, false);
     
     static bool initialized = false;
     static uint8_t i2c_buffer[16] = {0};
@@ -602,11 +612,12 @@ static bool nes_classic_controller(void)
 
     i2c_buffer[0] = 0x00;
     (void)i2c_write_blocking(i2cHandle, I2C_ADDRESS, i2c_buffer, 1, false);   // false - finished with bus
-    sleep_ms(1);
+    sleep_us(300);  // NES Classic uses about 330uS
     int ret = i2c_read_blocking(i2cHandle, I2C_ADDRESS, i2c_buffer, 8, false);
     if (ret < 0)
     {
         last_micros = time_us_32();
+        gpio_set_irq_enabled(VSYNC_PIN, GPIO_IRQ_EDGE_RISE, true);
         return false;
     }
         
@@ -657,10 +668,11 @@ static bool nes_classic_controller(void)
     gpio_put(ONBOARD_LED_PIN, buttondown);
 #endif
 
+    gpio_set_irq_enabled(VSYNC_PIN, GPIO_IRQ_EDGE_RISE, true);
     return true;
 }
 
-static void gpio_callback(uint gpio, uint32_t events) 
+static void __no_inline_not_in_flash_func(gpio_callback)(uint gpio, uint32_t events)
 {
     // Prevent controller input to game if OSD is visible
     if (OSD_is_enabled())
@@ -726,6 +738,9 @@ static void __no_inline_not_in_flash_func(command_check)(void)
     if (memcmp(button_states, button_states_previous, sizeof(button_states)) == 0)
         return;
 
+    // Ignore any button presses for the first 5 seconds
+    if (time_us_32() < 5000000)
+        return;
 
     if (button_is_pressed(BUTTON_SELECT))
     {
@@ -772,12 +787,16 @@ static void __no_inline_not_in_flash_func(command_check)(void)
                             background_color = rgb888_to_rgb222(get_background_color());
                             update_osd();
                             break;
-                        case OSD_LINE_SAVE_SETTINGS:
-                            save_settings();
+                        case OSD_LINE_FRAMEBLENDING:
+                            frameblending_enabled = !frameblending_enabled;
                             update_osd();
                             break;
                         case OSD_LINE_RESET_GAMEBOY:
                             gameboy_reset();
+                            break;
+                        case OSD_LINE_SAVE_SETTINGS:
+                            save_settings();
+                            update_osd();
                             break;
                         case OSD_LINE_EXIT:
                             OSD_toggle();
@@ -807,7 +826,12 @@ static void update_osd(void)
 
 
     OSD_set_line_text(OSD_LINE_RESET_GAMEBOY, "RESET GAMEBOY");
+
+    sprintf(buff, "FRAME BLEND:% 6s", frameblending_enabled ? "ON" : "OFF");
+    OSD_set_line_text(OSD_LINE_FRAMEBLENDING, buff);
+    
     OSD_set_line_text(OSD_LINE_SAVE_SETTINGS, "SAVE & EXIT");
+
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
 
     OSD_update();
@@ -885,4 +909,11 @@ static void enable_core1(bool enable)
 
         multicore_reset_core1();
     }
+}
+
+static void read_pixel(void)
+{
+    uint8_t new_value = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
+    *pixel_active++ = frameblending_enabled ? (new_value == 0 ? new_value|*pixel_old : new_value) : new_value;
+    *pixel_old++ = new_value > 0 ? 2 : 0;   // To brighten up the previous frame
 }
