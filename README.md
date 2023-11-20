@@ -13,7 +13,7 @@ Notable changes:
  - MODEL_B version fits inside a NESPi case, with SGB Cart rev, the cartridge fits all the way in
  - Custom PCBs
  - With MODEL_B PCB, you won't need a functioning Gameboy motherboard.  You just need a good CPU and RAM (you could even use CPU/RAM from a Super Gameboy SNES/Famicom cartridge)
- 
+ - There is now an RGB332 version, currently in a separate branch (RGB332) because of the GPIO pinout changes  
 
 ![preview](https://github.com/joeostrander/consolized-game-boy/blob/main/images/preview.png?raw=true)
 
