@@ -47,6 +47,8 @@ typedef enum
     SCHEME_SGB_4F,
     SCHEME_SGB_4G,
     SCHEME_SGB_4H,
+    SCHEME_GBP_NSO,
+    SCHEME_DMG_NSO,
 
     NUMBER_OF_SCHEMES
 } COLOR_SCHEMES;
@@ -85,8 +87,6 @@ void increase_color_scheme_index(int direction);
 color_scheme_t* get_scheme(void);
 int get_scheme_index(void);
 void set_scheme_index(int index);
-uint16_t rgb888_to_rgb222(uint32_t color);
-void reverse_rgb_bits_toggle(void);
-bool rgb_bit_reverse_state(void);
+uint16_t rgb888_to_rgb332(uint32_t color);
 
 #endif // COLORS_H

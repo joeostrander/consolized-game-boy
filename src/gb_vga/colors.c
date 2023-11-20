@@ -1,9 +1,6 @@
 #include "colors.h"
 #include "pico/scanvideo.h"
 
-// I had the high bit/low bit reversed on some PCB revs
-static bool rgb_bits_reversed = false;
-
 static color_scheme_t color_schemes[NUMBER_OF_SCHEMES] = 
 {
     [SCHEME_BLACK_AND_WHITE] =  { 0xF7F3F7, 0x4E4C4E, 0xB5B2B5, 0x000000 },
@@ -42,7 +39,9 @@ static color_scheme_t color_schemes[NUMBER_OF_SCHEMES] =
     [SCHEME_SGB_4E] =           { 0xF7D3A5, 0x7B598C, 0xDEA27B, 0x002031 },
     [SCHEME_SGB_4F] =           { 0xB5CBCE, 0x84009C, 0xD682D6, 0x390000 },
     [SCHEME_SGB_4G] =           { 0xADDB18, 0x291000, 0xB5205A, 0x008263 },
-    [SCHEME_SGB_4H] =           { 0xF7F3C6, 0x848A42, 0xB5BA5A, 0x425129 }
+    [SCHEME_SGB_4H] =           { 0xF7F3C6, 0x848A42, 0xB5BA5A, 0x425129 },
+    [SCHEME_GBP_NSO] =          { 0xB5C69C, 0x8D9C7B, 0x6C7251, 0x303820 },
+    [SCHEME_DMG_NSO] =          { 0x8CAD28, 0x6C9421, 0x426B29, 0x214231 }
 };
 
 static uint32_t basic_colors[NUMBER_OF_COLORS] = 
@@ -116,35 +115,13 @@ void set_scheme_index(int index)
     color_scheme_index = index;
 }
 
-uint16_t rgb888_to_rgb222(uint32_t color)
+uint16_t rgb888_to_rgb332(uint32_t color)
 {
         uint32_t ret = 0;
-        if (rgb_bits_reversed)
-        {
-            ret = ((color & (1<<6)) >> 5);          //b1
-            ret = ret | ((color & (1<<7)) >> 7);    //b0
-            ret = ret | ((color & (1<<14)) >> 11);  //g1
-            ret = ret | ((color & (1<<15)) >> 13);  //g0
-            ret = ret | ((color & (1<<22)) >> 17);  //r1
-            ret = ret | ((color & (1<<23)) >> 19);  //r0
-        }
-        else
-        {
-            uint32_t red = (color & 0xC00000) >> 22;
-            uint32_t green = (color & 0xC000) >> 14;
-            uint32_t blue = (color & 0xC0) >> 6;
-            ret = ret = ( ( blue<<PICO_SCANVIDEO_PIXEL_BSHIFT ) |( green<<PICO_SCANVIDEO_PIXEL_GSHIFT ) |( red<<PICO_SCANVIDEO_PIXEL_RSHIFT ) );
-        }
-            
+        uint32_t red = (color & 0xE00000) >> 21;
+        uint32_t green = (color & 0xC000) >> 13;
+        uint32_t blue = (color & 0xC0) >> 6;
+        ret = ret = ( ( blue<<PICO_SCANVIDEO_PIXEL_BSHIFT ) |( green<<PICO_SCANVIDEO_PIXEL_GSHIFT ) |( red<<PICO_SCANVIDEO_PIXEL_RSHIFT ) );
+        
         return (uint16_t)ret;
-}
-
-void reverse_rgb_bits_toggle()
-{
-    rgb_bits_reversed = !rgb_bits_reversed;
-}
-
-bool rgb_bit_reverse_state(void)
-{
-    return rgb_bits_reversed;
 }

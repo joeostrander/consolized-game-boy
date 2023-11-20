@@ -2,7 +2,7 @@
     Authors: 
         Andy West (original concept and code)
         Joe Ostrander
-            - conversion to single Pico (gpio callbacks, reduction to RGB222, etc.)
+            - conversion to single Pico (gpio callbacks, bit-depth reduction, etc.)
             - on-screen display for custom settings
             - I2C game controller code
             - save settings to flash
@@ -11,7 +11,7 @@
 
         You too can contribute and I welcome any suggestions!
 
-    Version: 2.4.0
+    Version: 3.0.0
 
     https://github.com/joeostrander/consolized-game-boy
 
@@ -41,13 +41,7 @@
 #include "flash_utils.h"
 #include "hardware/irq.h"
 
-// #define USE_NES_CONTROLLER   // Uncomment to use old-school NES controller
 // #define DEBUG_BUTTON_PRESS   // Illuminate LED on button presses
-
-// Shift register pins -- for old-school NES controller
-#define DATA_PIN                8
-#define LATCH_PIN               9
-#define PULSE_PIN               10
 
 // I2C Pins, etc. -- for I2C controller
 #define SDA_PIN     12
@@ -190,7 +184,6 @@ static uint16_t background_color;
 static void __no_inline_not_in_flash_func(core1_func)(void);
 static void __no_inline_not_in_flash_func(render_scanline)(scanvideo_scanline_buffer_t *dest);
 static void initialize_gpio(void);
-static bool __no_inline_not_in_flash_func(nes_controller)(void);
 static bool __no_inline_not_in_flash_func(nes_classic_controller)(void);
 static void __no_inline_not_in_flash_func(gpio_callback)(uint gpio, uint32_t events);
 static void __no_inline_not_in_flash_func(gpio_callback_VIDEO)(uint gpio, uint32_t events);
@@ -239,7 +232,7 @@ int main(void)
 
     load_settings();
 
-    background_color = rgb888_to_rgb222(get_background_color());
+    background_color = rgb888_to_rgb332(get_background_color());
     color_scheme = get_scheme();
     
     osd_framebuffer = OSD_get_framebuffer();
@@ -251,17 +244,10 @@ int main(void)
 
     while (true) 
     {
-#ifdef USE_NES_CONTROLLER
-        if (nes_controller())
-        {
-            command_check();
-        }
-#else
         if (nes_classic_controller())
         {
             command_check();
         }
-#endif
     }
 }
 
@@ -347,7 +333,7 @@ static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, siz
     {
         if (x == 0 && i == 0)
         {
-            *first_pixel = rgb888_to_rgb222( *((uint32_t*)color_scheme + *pbuff) ) ;
+            *first_pixel = rgb888_to_rgb332( *((uint32_t*)color_scheme + *pbuff) ) ;
         }
         else
         {
@@ -368,7 +354,7 @@ static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, siz
             }
             else
             {
-                color = rgb888_to_rgb222( *((uint32_t*)color_scheme + *pbuff) ) ;
+                color = rgb888_to_rgb332( *((uint32_t*)color_scheme + *pbuff) ) ;
             }
 
             *p16++ = color; 
@@ -488,26 +474,6 @@ static void initialize_gpio(void)
     // UART, for testing
     //stdio_init_all();
 
-#ifdef USE_NES_CONTROLLER
-
-    /* NES Controller - start */
-
-    /* Clock, normally HIGH */
-    gpio_init(PULSE_PIN);
-    gpio_set_dir(PULSE_PIN, GPIO_OUT);
-    gpio_put(PULSE_PIN, 1);
-
-    /* Latch, normally LOW */
-    gpio_init(LATCH_PIN);
-    gpio_set_dir(LATCH_PIN, GPIO_OUT);
-    gpio_put(LATCH_PIN, 0);
-
-    /* Data, reads normally high */
-    gpio_init(DATA_PIN);
-    gpio_set_dir(DATA_PIN, GPIO_IN);
-
-    /* NES Controller - end */
-#else
     //Initialize I2C port at 400 kHz
     i2c_init(i2cHandle, 400 * 1000);
 
@@ -516,7 +482,6 @@ static void initialize_gpio(void)
     gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
     gpio_pull_up(SCL_PIN);
     gpio_pull_up(SDA_PIN);
-#endif
 
     gpio_init(DMG_OUTPUT_RIGHT_A_PIN);
     gpio_set_dir(DMG_OUTPUT_RIGHT_A_PIN, GPIO_OUT);
@@ -539,47 +504,6 @@ static void initialize_gpio(void)
 
     gpio_init(DMG_READING_BUTTONS_PIN);
     gpio_set_dir(DMG_READING_BUTTONS_PIN, GPIO_IN);
-}
-
-static bool __no_inline_not_in_flash_func(nes_controller)(void)
-{
-    static uint32_t last_micros = 0;
-    uint32_t current_micros = time_us_32();
-    if (current_micros - last_micros < 20000)
-        return false;
-
-    last_micros = current_micros;
-
-    gpio_put(LATCH_PIN, 1);
-    sleep_us(5);
-    gpio_put(LATCH_PIN, 0);
-    sleep_us(1);
-    button_states[0] = gpio_get(DATA_PIN) ? BUTTON_STATE_UNPRESSED : BUTTON_STATE_PRESSED;
-    sleep_us(4);
-
-    for (uint i = 1; i < 8; i++) 
-    {
-        sleep_us(8);
-        gpio_put(PULSE_PIN, 0);
-        sleep_us(1);
-        gpio_put(PULSE_PIN, 1);
-        sleep_us(8);
-        button_states[i] = gpio_get(DATA_PIN) ? BUTTON_STATE_UNPRESSED : BUTTON_STATE_PRESSED;
-    }
-
-#ifdef DEBUG_BUTTON_PRESS
-    uint8_t buttondown = 0;
-    for (int i = 0; i < BUTTON_HOME; i++)
-    {
-        if (button_states[i] == BUTTON_STATE_PRESSED)
-        {
-            buttondown = 1;
-        }
-    }
-    gpio_put(ONBOARD_LED_PIN, buttondown);
-#endif
-
-    return true;
 }
 
 static bool __no_inline_not_in_flash_func(nes_classic_controller)(void)
@@ -788,7 +712,7 @@ static void __no_inline_not_in_flash_func(command_check)(void)
                             break;
                         case OSD_LINE_BORDER_COLOR:
                             increase_border_color_index(leftbtn ? -1 : 1);
-                            background_color = rgb888_to_rgb222(get_background_color());
+                            background_color = rgb888_to_rgb332(get_background_color());
                             update_osd();
                             break;
                         case OSD_LINE_FRAMEBLENDING:

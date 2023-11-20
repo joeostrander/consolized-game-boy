@@ -27,12 +27,12 @@ if (TARGET pico_scanvideo_dpi)
         )
 
     # RGB222
-    add_compile_definitions(PICO_SCANVIDEO_COLOR_PIN_COUNT=6)    # scanvideo_base.h
-    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_RSHIFT=4)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_COLOR_PIN_COUNT=8)    # scanvideo_base.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_RSHIFT=5)   # scanvideo.h
     add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_GSHIFT=2)   # scanvideo.h
     add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_BSHIFT=0)   # scanvideo.h
-    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_RCOUNT=2)   # scanvideo.h
-    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_GCOUNT=2)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_RCOUNT=3)   # scanvideo.h
+    add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_GCOUNT=3)   # scanvideo.h
     add_compile_definitions(PICO_SCANVIDEO_DPI_PIXEL_BCOUNT=2)   # scanvideo.h
 
     target_link_libraries(gb_vga PRIVATE
@@ -48,7 +48,7 @@ endif ()
 pico_set_linker_script(gb_vga ${CMAKE_SOURCE_DIR}/memmap_custom.ld)
 
 pico_set_program_name(gb_vga "gb_vga")
-pico_set_program_version(gb_vga "2.4.0")
+pico_set_program_version(gb_vga "3.0.0")
 
 # UART & USB
 # pico_enable_stdio_usb(gb_vga 1)
