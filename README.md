@@ -3,9 +3,24 @@
 ## Description
 This is a modified version of Andy West's project from *element14 Presents* episode 531: "Game Guy - The Unportable Game Boy".  
 
+![gameplay](./images/gameplay.gif?raw=true)  
+
+![front closed](./images/front_closed.jpg?raw=true)  
+
+![front open](./images/front_open.jpg?raw=true)  
+
+![back](./images/back.jpg?raw=true)  
+
+![screencap osd](./images/screencap_osd.jpg?raw=true)  
+
+![screencap 1](./images/screencap1.jpg?raw=true)  
+
+![screencap 2](./images/screencap2.jpg?raw=true)  
+
+
 Notable changes:
  - Single Pico!
- - Using RGB222 Video to free up GPIO (with the limited color schemes, I doubt anyone would notice!)
+ - Using RGB222 or RGB332 Video to free up GPIO (with the limited color schemes, I doubt anyone would notice!)
  - All pins have been remapped; this was done mostly to make things easier to route PCB traces
  - 3x scale maintaining aspect ratio
  - Option to enable scanlines, pixel effect, etc.
