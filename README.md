@@ -30,11 +30,8 @@ Notable changes:
  - With MODEL_B PCB, you won't need a functioning Gameboy motherboard.  You just need a good CPU and RAM (you could even use CPU/RAM from a Super Gameboy SNES/Famicom cartridge)
  - There is now an RGB332 version, currently in a separate branch (RGB332) because of the GPIO pinout changes  
 
-![preview](https://github.com/joeostrander/consolized-game-boy/blob/main/images/preview.png?raw=true)
 
-[Video sample](https://youtu.be/khdu8cWNxHo)
-
-[OSD](https://youtu.be/VJUn-7w2_1k)
+[RGB332](https://youtu.be/dT88XEHc5w8)
 
 Andy liked my modifications and made an updated video where he built one with my changes :)
 [![The Game Guy Mini, Upgrading the Unportable Game Boy!](https://i.ytimg.com/vi/gPNHySf-hk0/0.jpg)](https://youtu.be/gPNHySf-hk0)
