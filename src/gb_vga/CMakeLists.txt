@@ -48,7 +48,7 @@ endif ()
 pico_set_linker_script(gb_vga ${CMAKE_SOURCE_DIR}/memmap_custom.ld)
 
 pico_set_program_name(gb_vga "gb_vga")
-pico_set_program_version(gb_vga "3.0.0")
+pico_set_program_version(gb_vga "3.0.1")
 
 # UART & USB
 # pico_enable_stdio_usb(gb_vga 1)

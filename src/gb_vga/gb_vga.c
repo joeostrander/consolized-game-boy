@@ -11,7 +11,7 @@
 
         You too can contribute and I welcome any suggestions!
 
-    Version: 3.0.0
+    Version: 3.0.1
 
     https://github.com/joeostrander/consolized-game-boy
 
@@ -40,6 +40,7 @@
 #include "hardware/flash.h"
 #include "flash_utils.h"
 #include "hardware/irq.h"
+#include "pico/bootrom.h"
 
 // #define DEBUG_BUTTON_PRESS   // Illuminate LED on button presses
 
@@ -80,7 +81,8 @@ i2c_inst_t* i2cHandle = i2c0;
 typedef enum
 {
     SAVE_INDEX_SCHEME = 0,
-    SAVE_INDEX_BORDER
+    SAVE_INDEX_BORDER,
+    SAVE_INDEX_FRAME_BLENDING
 } save_position_t;
 
 typedef enum
@@ -103,6 +105,7 @@ typedef enum
     OSD_LINE_BORDER_COLOR,
     OSD_LINE_FRAMEBLENDING,
     OSD_LINE_RESET_GAMEBOY,
+    OSD_LINE_RESET_DEVICE,
     OSD_LINE_SAVE_SETTINGS,
     OSD_LINE_EXIT,
     OSD_LINE_COUNT
@@ -121,6 +124,19 @@ typedef struct rectangle_t
     uint16_t width;
     uint16_t height;
 } rectangle_t;
+
+typedef enum
+{
+    DISABLE_MASK_NONE = 0,
+    DISABLE_MASK_MASS_STORAGE,
+    DISABLE_MASK_PICOBOOT
+} interface_disable_mask_t;
+
+typedef enum
+{
+    RESTART_NORMAL = 0,
+    RESTART_MASS_STORAGE,
+} restart_option_t;
 
 //**********************************************************************************************
 // PRIVATE VARIABLES
@@ -178,6 +194,8 @@ static rectangle_t rect_gamewindow;
 static rectangle_t rect_osd;
 static uint16_t background_color;
 
+static restart_option_t restart_option = RESTART_NORMAL;
+
 //**********************************************************************************************
 // PRIVATE FUNCTION PROTOTYPES
 //**********************************************************************************************
@@ -195,6 +213,7 @@ static void update_osd(void);
 static void set_orientation(void);
 static void gameboy_reset(void);
 static void __no_inline_not_in_flash_func(save_settings)(void);
+static void restart_rp2040(restart_option_t restart_option);
 static void load_settings(void);
 static void enable_core1(bool enable);
 static void read_pixel(void);
@@ -702,16 +721,16 @@ static void __no_inline_not_in_flash_func(command_check)(void)
                         || button_was_released(BUTTON_LEFT)
                         || button_was_released(BUTTON_A))
                 {
-                    bool leftbtn = button_was_released(BUTTON_LEFT);
+                    controller_button_t button = button_was_released(BUTTON_A) ? BUTTON_A : button_was_released(BUTTON_RIGHT) ? BUTTON_RIGHT : BUTTON_LEFT;
                     switch (OSD_get_active_line())
                     {
                         case OSD_LINE_COLOR_SCHEME:
-                            increase_color_scheme_index(leftbtn ? -1 : 1);
+                            increase_color_scheme_index(button == BUTTON_LEFT ? -1 : 1);
                             color_scheme = get_scheme();
                             update_osd();
                             break;
                         case OSD_LINE_BORDER_COLOR:
-                            increase_border_color_index(leftbtn ? -1 : 1);
+                            increase_border_color_index(button == BUTTON_LEFT ? -1 : 1);
                             background_color = rgb888_to_rgb332(get_background_color());
                             update_osd();
                             break;
@@ -721,6 +740,17 @@ static void __no_inline_not_in_flash_func(command_check)(void)
                             break;
                         case OSD_LINE_RESET_GAMEBOY:
                             gameboy_reset();
+                            break;
+                        case OSD_LINE_RESET_DEVICE:
+                            if (button == BUTTON_A)
+                            {
+                                restart_rp2040(restart_option);
+                            }
+                            else
+                            {
+                                restart_option = restart_option == RESTART_NORMAL ? RESTART_MASS_STORAGE : RESTART_NORMAL;
+                                update_osd();
+                            }
                             break;
                         case OSD_LINE_SAVE_SETTINGS:
                             save_settings();
@@ -746,18 +776,21 @@ static void __no_inline_not_in_flash_func(command_check)(void)
 static void update_osd(void)
 {
     char buff[32];
-    sprintf(buff, "COLOR SCHEME:% 5d", get_scheme_index());
+    sprintf(buff, "COLOR SCHEME:%5d", get_scheme_index());
     OSD_set_line_text(OSD_LINE_COLOR_SCHEME, buff);
 
-    sprintf(buff, "BORDER COLOR:% 5d", get_border_color_index());
+    sprintf(buff, "BORDER COLOR:%5d", get_border_color_index());
     OSD_set_line_text(OSD_LINE_BORDER_COLOR, buff);
 
 
     OSD_set_line_text(OSD_LINE_RESET_GAMEBOY, "RESET GAMEBOY");
 
-    sprintf(buff, "FRAME BLEND:% 6s", frameblending_enabled ? "ON" : "OFF");
+    sprintf(buff, "FRAME BLEND:%6s", frameblending_enabled ? "ON" : "OFF");
     OSD_set_line_text(OSD_LINE_FRAMEBLENDING, buff);
     
+    sprintf(buff, "RESET DEVICE:%5s", restart_option == RESTART_MASS_STORAGE ? "USB" : "NORM");
+    OSD_set_line_text(OSD_LINE_RESET_DEVICE, buff);
+
     OSD_set_line_text(OSD_LINE_SAVE_SETTINGS, "SAVE & EXIT");
 
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
@@ -790,10 +823,39 @@ static void __no_inline_not_in_flash_func(save_settings)(void)
     enable_core1(false);
     EEPROM_write(SAVE_INDEX_SCHEME, get_scheme_index());
     EEPROM_write(SAVE_INDEX_BORDER, get_border_color_index());
+    EEPROM_write(SAVE_INDEX_FRAME_BLENDING, frameblending_enabled ? 1 : 0);
     bool ret = EEPROM_commit();
+
+    // TODO: Sometimes this locks up the device, need to investigate
     enable_core1(true);
     if (ret)
         OSD_toggle();
+
+    // OR... Restart device?
+    //restart_rp2040(RESTART_NORMAL);
+}
+
+
+#define AIRCR_Register (*((volatile uint32_t*)(PPB_BASE + 0x0ED0C)))
+static void restart_rp2040(restart_option_t restart_option)
+{
+    enable_core1(false);
+
+    if (restart_option == RESTART_NORMAL)
+    {
+        // Reset the RP2040
+        AIRCR_Register = 0x05FA0004;
+    }
+    else
+    {
+        // Reset the RP2040 into USB boot mode
+        reset_usb_boot(0, DISABLE_MASK_NONE);
+    }
+
+    while (1)
+    {
+        tight_loop_contents();
+    }
 }
 
 static void load_settings(void)
@@ -801,6 +863,7 @@ static void load_settings(void)
     enable_core1(false);
     set_scheme_index((int)EEPROM_read(SAVE_INDEX_SCHEME));
     set_border_color_index((int)EEPROM_read(SAVE_INDEX_BORDER));
+    frameblending_enabled = EEPROM_read(SAVE_INDEX_FRAME_BLENDING) == 1;
     enable_core1(true);
 }
 
