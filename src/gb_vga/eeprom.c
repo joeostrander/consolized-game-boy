@@ -123,14 +123,20 @@ bool EEPROM_commit(void)
     if (!init)
         _load();
 
-    if (!_dirty) {
+    if (!_dirty)
         return true;
-    }
 
-    uint32_t ints = save_and_disable_interrupts();
+    // Not really necessary in this implementation, but keeping around
+    if (!_data)
+        return false;
+
+    // NOTE:  I'm not re-enabling interrupts because there is a lockup
+    // instead, I'm restarting the device!  If anyone can point me in 
+    // the right direction please help :)
+    // uint32_t ints = save_and_disable_interrupts();
     flash_range_erase(FLASH_ADDRESS_SECTOR, FLASH_SECTOR_SIZE);
     flash_range_program(FLASH_ADDRESS_PAGE, _data, FLASH_PAGE_SIZE);
-    restore_interrupts(ints);
+    // restore_interrupts(ints);
 
     _dirty = false;
 
