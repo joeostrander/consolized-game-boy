@@ -11,7 +11,7 @@
 
         You too can contribute and I welcome any suggestions!
 
-    Version: 3.0.1
+    Version: 3.0.2
 
     https://github.com/joeostrander/consolized-game-boy
 
@@ -212,7 +212,7 @@ static long map(long x, long in_min, long in_max, long out_min, long out_max);
 static void update_osd(void);
 static void set_orientation(void);
 static void gameboy_reset(void);
-static void __no_inline_not_in_flash_func(save_settings)(void);
+static void save_and_restart(void);
 static void restart_rp2040(restart_option_t restart_option);
 static void load_settings(void);
 static void enable_core1(bool enable);
@@ -753,8 +753,8 @@ static void __no_inline_not_in_flash_func(command_check)(void)
                             }
                             break;
                         case OSD_LINE_SAVE_SETTINGS:
-                            save_settings();
-                            update_osd();
+                            save_and_restart();
+                            //update_osd(); // skip, since we're restarting 
                             break;
                         case OSD_LINE_EXIT:
                             OSD_toggle();
@@ -791,7 +791,7 @@ static void update_osd(void)
     sprintf(buff, "RESET DEVICE:%5s", restart_option == RESTART_MASS_STORAGE ? "USB" : "NORM");
     OSD_set_line_text(OSD_LINE_RESET_DEVICE, buff);
 
-    OSD_set_line_text(OSD_LINE_SAVE_SETTINGS, "SAVE & EXIT");
+    OSD_set_line_text(OSD_LINE_SAVE_SETTINGS, "SAVE & RESTART");
 
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
 
@@ -818,21 +818,17 @@ static void gameboy_reset(void)
     gpio_put(GAMEBOY_RESET_PIN, 1);
 }
 
-static void __no_inline_not_in_flash_func(save_settings)(void)
+static void save_and_restart(void)
 {
     enable_core1(false);
     EEPROM_write(SAVE_INDEX_SCHEME, get_scheme_index());
     EEPROM_write(SAVE_INDEX_BORDER, get_border_color_index());
     EEPROM_write(SAVE_INDEX_FRAME_BLENDING, frameblending_enabled ? 1 : 0);
+
     bool ret = EEPROM_commit();
 
-    // TODO: Sometimes this locks up the device, need to investigate
-    enable_core1(true);
-    if (ret)
-        OSD_toggle();
-
-    // OR... Restart device?
-    //restart_rp2040(RESTART_NORMAL);
+    // Restart device
+    restart_rp2040(RESTART_NORMAL);
 }
 
 

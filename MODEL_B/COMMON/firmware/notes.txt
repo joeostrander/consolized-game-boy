@@ -1,5 +1,6 @@
-2024.06.28 v3.0.1
+2024.06.29 v3.0.2
 - save frameblending
+- workaround for saving flash
 
 2023.11.19 v3.0.0
 - New PCB and code to support RGB332
