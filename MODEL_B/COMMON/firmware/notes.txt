@@ -1,3 +1,6 @@
+2024.07.07 v2.4.3
+- same as v2.4.2, but recompiled with rgb bit reverse off (accidentally did that on 2.4.2)
+
 2024.06.29 v2.4.2
 - save frameblending
 - workaround for saving flash
