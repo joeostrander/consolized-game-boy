@@ -1,0 +1,89 @@
+; PIO program for I2S audio output (for HDMI audio processing)
+; This generates bit-perfect timing for feeding the DVI audio system
+;
+; Generates I2S-style serial data stream from DMA-fed samples
+; Can be used to precisely time audio samples without CPU jitter
+
+.program audio_i2s
+.side_set 2
+
+; Autopull must be enabled for this to work
+; OSR shifts to left, autopull at 32 bits
+; Side-set: bit 0 = bit clock, bit 1 = word select (L/R)
+
+.wrap_target
+    ; Left channel (16 bits)
+public entry_point:
+    set x, 14               side 0b00   ; 15 bits to send (bit 15 sent below)
+left_bit_loop:
+    out pins, 1             side 0b01   ; Output bit on rising edge of bit clock
+    jmp x-- left_bit_loop   side 0b00   ; Loop for 15 bits
+    out pins, 1             side 0b01   ; Output final bit
+
+    ; Right channel (16 bits) 
+    set x, 14               side 0b10   ; Word select high for right channel
+right_bit_loop:
+    out pins, 1             side 0b11   
+    jmp x-- right_bit_loop  side 0b10
+    out pins, 1             side 0b11
+.wrap
+
+% c-sdk {
+static inline void audio_i2s_program_init(PIO pio, uint sm, uint offset, uint data_pin, uint clock_pin_base, float div) {
+    pio_sm_config c = audio_i2s_program_get_default_config(offset);
+    
+    // Map state machine outputs
+    sm_config_set_out_pins(&c, data_pin, 1);           // Data output
+    sm_config_set_sideset_pins(&c, clock_pin_base);    // Clock pins (BCK and WS)
+    
+    // Set pins as outputs
+    pio_gpio_init(pio, data_pin);
+    pio_gpio_init(pio, clock_pin_base);     // Bit clock
+    pio_gpio_init(pio, clock_pin_base + 1); // Word select
+    
+    pio_sm_set_consecutive_pindirs(pio, sm, data_pin, 1, true);
+    pio_sm_set_consecutive_pindirs(pio, sm, clock_pin_base, 2, true);
+    
+    // OSR shifts to left, autopull at 32 bits
+    sm_config_set_out_shift(&c, false, true, 32);
+    
+    // Set clock divider
+    sm_config_set_clkdiv(&c, div);
+    
+    // FIFO config - join FIFOs to make an 8-entry TX FIFO
+    sm_config_set_fifo_join(&c, PIO_FIFO_JOIN_TX);
+    
+    // Load config and jump to start
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}
+
+
+; Alternative: Simple PWM-style audio for direct HDMI audio ring buffer
+; This version just outputs samples at precise intervals
+.program audio_pwm
+
+.wrap_target
+public entry_point:
+    pull block              ; Wait for new sample from DMA
+    out pins, 16            ; Output 16-bit sample
+    ; Optional: add delay here for exact sample rate timing
+.wrap
+
+% c-sdk {
+static inline void audio_pwm_program_init(PIO pio, uint sm, uint offset, uint pin, float div) {
+    pio_sm_config c = audio_pwm_program_get_default_config(offset);
+    
+    sm_config_set_out_pins(&c, pin, 16);
+    sm_config_set_out_shift(&c, true, true, 32); // Shift right, autopull
+    sm_config_set_clkdiv(&c, div);
+    
+    // Set pins as outputs
+    for(int i = 0; i < 16; i++) {
+        pio_gpio_init(pio, pin + i);
+    }
+    pio_sm_set_consecutive_pindirs(pio, sm, pin, 16, true);
+    
+    pio_sm_init(pio, sm, offset, &c);
+}
+%}

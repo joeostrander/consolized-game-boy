@@ -3,6 +3,7 @@
 
 #include "pico/stdlib.h"
 
+
 typedef enum
 {
     SCHEME_BLACK_AND_WHITE = 0,
@@ -42,8 +43,6 @@ typedef enum
     SCHEME_SGB_4F,
     SCHEME_SGB_4G,
     SCHEME_SGB_4H,
-    SCHEME_GBP_NSO,
-    SCHEME_DMG_NSO,
 
     NUMBER_OF_SCHEMES
 } COLOR_SCHEMES;
@@ -79,10 +78,11 @@ int get_border_color_index(void);
 void set_border_color_index(int index);
 void increase_border_color_index(int direction);
 void increase_color_scheme_index(int direction);
-color_scheme_t* get_scheme(void);
+const color_scheme_t* get_scheme(void);  // Returns const pointer to flash data
 int get_scheme_index(void);
 void set_scheme_index(int index);
-uint16_t rgb888_to_rgb332(uint32_t color);
 uint16_t rgb888_to_rgb222(uint32_t color);
+void reverse_rgb_bits_toggle(void);
+bool rgb_bit_reverse_state(void);
 
 #endif // COLORS_H

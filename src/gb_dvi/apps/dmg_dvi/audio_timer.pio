@@ -1,0 +1,17 @@
+; PIO program for precise audio sample timing
+; Generates IRQ at exact sample rate intervals
+; Uses no pins - just generates timing signal
+
+.program audio_timer
+
+.wrap_target
+    irq 0               ; Trigger IRQ
+    nop                 ; Delay
+    nop                 ; Delay  
+.wrap
+
+% c-sdk {
+// This program just generates IRQs at a precise interval
+// The clock divider determines the sample rate
+// With 3 cycles per loop (irq + nop + nop), sample_rate = sys_clk / (3 * divider)
+%}

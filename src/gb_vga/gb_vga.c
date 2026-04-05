@@ -2,7 +2,7 @@
     Authors: 
         Andy West (original concept and code)
         Joe Ostrander
-            - conversion to single Pico (gpio callbacks, reduction to RGB222, etc.)
+            - conversion to single Pico (gpio callbacks, bit-depth reduction, etc.)
             - on-screen display for custom settings
             - I2C game controller code
             - save settings to flash
@@ -11,7 +11,6 @@
 
         You too can contribute and I welcome any suggestions!
 
-    Version: 2.4.2
 
     https://github.com/joeostrander/consolized-game-boy
 
@@ -38,23 +37,38 @@
 #include "eeprom.h"
 #include "hardware/dma.h"
 #include "hardware/flash.h"
-#include "flash_utils.h"
 #include "hardware/irq.h"
+#include "hardware/clocks.h"
+#include "hardware/watchdog.h"
 #include "pico/bootrom.h"
+#include "video_capture.pio.h"  // PIO-based video capture
 
-// #define USE_NES_CONTROLLER   // Uncomment to use old-school NES controller
-// #define DEBUG_BUTTON_PRESS   // Illuminate LED on button presses
+// #define TEST_MARIO_FRAMEBUFFER
 
-// Shift register pins -- for old-school NES controller
-#define DATA_PIN                8
-#define LATCH_PIN               9
-#define PULSE_PIN               10
+#ifdef TEST_MARIO_FRAMEBUFFER
+#include "mario.h"
+#endif
 
+#ifndef USE_RGB332_PCB
+#define USE_RGB332_PCB                  0     // set to 0 to use RGB222
+#endif
+
+#ifndef USE_NES_CLASSIC_OR_WII
+#define USE_NES_CLASSIC_OR_WII  0 // Set to 1 to use I2C controller (NES Classic or Wii)
+#endif
+
+#if USE_NES_CLASSIC_OR_WII
 // I2C Pins, etc. -- for I2C controller
 #define SDA_PIN     12
 #define SCL_PIN     13
 #define I2C_ADDRESS 0x52
 i2c_inst_t* i2cHandle = i2c0;
+#else // use old-school NES controller
+// Shift register pins -- for old-school NES controller
+#define DATA_PIN                8
+#define LATCH_PIN               9
+#define PULSE_PIN               10
+#endif
 
 #define MIN_RUN 3
 
@@ -80,6 +94,7 @@ i2c_inst_t* i2cHandle = i2c0;
 #define DMG_PIXELS_X                160
 #define DMG_PIXELS_Y                144
 #define DMG_PIXEL_COUNT             (DMG_PIXELS_X*DMG_PIXELS_Y)
+#define PACKED_FRAME_SIZE           (DMG_PIXEL_COUNT / 4)
 
 //**********************************************************************************************
 // TYPEDEFS & STRUCTS
@@ -184,6 +199,10 @@ const scanvideo_mode_t vga_mode_640x480_3x_scale =
 #define VGA_MODE vga_mode_640x480_3x_scale
 #define LINE_LENGTH     ((uint16_t)(((VGA_MODE.width * 100.0)/VGA_MODE.xscale) + 50) / 100)
 
+#define VGA_PIXEL_CLOCK_KHZ        (VGA_MODE.default_timing->clock_freq / 1000u)
+#define VGA_SYS_CLOCK_MULTIPLIER   10u
+#define VGA_SYS_CLOCK_KHZ          (VGA_PIXEL_CLOCK_KHZ * VGA_SYS_CLOCK_MULTIPLIER)
+
 static semaphore_t video_initted;
 static uint8_t button_states[BUTTON_COUNT];
 static uint8_t button_states_previous[BUTTON_COUNT];
@@ -192,8 +211,8 @@ static color_scheme_t* color_scheme;
 static uint8_t* osd_framebuffer = NULL;
 static uint8_t framebuffer_active[DMG_PIXEL_COUNT] = {0};
 static uint8_t framebuffer_previous[DMG_PIXEL_COUNT] = {0};
-static uint8_t* pixel_active;
-static uint8_t* pixel_old;
+static uint8_t packed_buffer_0[PACKED_FRAME_SIZE] = {0};
+static uint8_t packed_buffer_1[PACKED_FRAME_SIZE] = {0};
 static bool frameblending_enabled = false;
 
 static rectangle_t rect_gamewindow;
@@ -202,14 +221,17 @@ static uint16_t background_color;
 
 static restart_option_t restart_option = RESTART_NORMAL;
 
+static PIO pio_video = pio1;  // Exclusively for video capture
+static uint video_sm = 0;
+static uint video_offset = 0;
+
 //**********************************************************************************************
 // PRIVATE FUNCTION PROTOTYPES
 //**********************************************************************************************
 static void __no_inline_not_in_flash_func(core1_func)(void);
 static void __no_inline_not_in_flash_func(render_scanline)(scanvideo_scanline_buffer_t *dest);
 static void initialize_gpio(void);
-static bool __no_inline_not_in_flash_func(nes_controller)(void);
-static bool __no_inline_not_in_flash_func(nes_classic_controller)(void);
+static bool __no_inline_not_in_flash_func(game_controller)(void);
 static void __no_inline_not_in_flash_func(gpio_callback)(uint gpio, uint32_t events);
 static void __no_inline_not_in_flash_func(gpio_callback_VIDEO)(uint gpio, uint32_t events);
 static void __no_inline_not_in_flash_func(command_check)(void);
@@ -219,24 +241,27 @@ static long map(long x, long in_min, long in_max, long out_min, long out_max);
 static void update_osd(void);
 static void set_orientation(void);
 static void gameboy_reset(void);
-static void save_and_restart(void);
-static void restart_rp2040(restart_option_t restart_option);
+static void save_settings(void);
+static void reset_pico(restart_option_t restart_option);
 static void load_settings(void);
 static void enable_core1(bool enable);
-static void read_pixel(void);
+static void apply_packed_frame(const uint8_t* packed_frame);
+static uint16_t color_convert(uint32_t color);
+#ifdef TEST_MARIO_FRAMEBUFFER
+static void load_test_framebuffer(void);
+#endif
 
 static int32_t __no_inline_not_in_flash_func(single_solid_line)(uint32_t *buf, size_t buf_length, uint16_t color);
 static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, size_t buf_length, uint8_t line_index);
 
 int main(void) 
 {
-    hw_set_bits(&vreg_and_chip_reset_hw->vreg, VREG_AND_CHIP_RESET_VREG_VSEL_BITS);
+    vreg_set_voltage(VREG_VOLTAGE_MAX);
     sleep_ms(10);
 
-    // should be a multiple of VGA_MODE clock_freq
-    //set_sys_clock_khz(300000, true);
-    //set_sys_clock_khz(240000, true);
-    set_sys_clock_khz(225000, true);    
+    // scanvideo uses the timing clock as the pixel clock; clk_sys must be a higher
+    // integer multiple of that rate, and set_sys_clock_khz expects kHz.
+    set_sys_clock_khz(VGA_SYS_CLOCK_KHZ, true);
 
     // Create a semaphore to be posted when video init is complete.
     sem_init(&video_initted, 0, 1);
@@ -258,29 +283,51 @@ int main(void)
 
     load_settings();
 
-    background_color = rgb888_to_rgb222(get_background_color());
+    background_color = color_convert(get_background_color());
     color_scheme = get_scheme();
     
     osd_framebuffer = OSD_get_framebuffer();
     update_osd();
 
     set_orientation();
-    
+
+#ifdef TEST_MARIO_FRAMEBUFFER
+    load_test_framebuffer();
+#else
     gpio_set_irq_enabled_with_callback(VSYNC_PIN, GPIO_IRQ_EDGE_RISE, true, &gpio_callback_VIDEO);
+
+    printf("Initializing PIO video capture...\n");
+    video_offset = pio_add_program(pio_video, &video_capture_irq_program);
+    video_capture_program_init(pio_video, video_sm, video_offset);
+
+    if (video_capture_dma_init(pio_video, video_sm, -1, packed_buffer_0, PACKED_FRAME_SIZE) < 0)
+    {
+        printf("ERROR: Video capture DMA initialization failed!\n");
+        while (1) { tight_loop_contents(); }
+    }
+
+    video_capture_start_frame(pio_video, video_sm, packed_buffer_0, PACKED_FRAME_SIZE);
+#endif
 
     while (true) 
     {
-#ifdef USE_NES_CONTROLLER
-        if (nes_controller())
+#ifndef TEST_MARIO_FRAMEBUFFER
+        (void)video_capture_poll_complete();
+
+        if (video_capture_frame_ready())
         {
-            command_check();
-        }
-#else
-        if (nes_classic_controller())
-        {
-            command_check();
+            uint8_t* completed_packed = video_capture_get_frame();
+            uint8_t* next_buffer = (completed_packed == packed_buffer_0) ? packed_buffer_1 : packed_buffer_0;
+
+            video_capture_start_frame(pio_video, video_sm, next_buffer, PACKED_FRAME_SIZE);
+            apply_packed_frame(completed_packed);
         }
 #endif
+
+        if (game_controller())
+        {
+            command_check();
+        }
     }
 }
 
@@ -300,36 +347,10 @@ static void __no_inline_not_in_flash_func(gpio_callback_VIDEO)(uint gpio, uint32
 //       ─────────────┐   ┌──┐  ┌┐ ┌┐ ┌──┐ ┌┐ ┌┐ ┌───────────────┐   ┌──┐  ┌┐ ┌┐ ┌──┐ 
 // DATA 0/1           └───┘  └──┘└─┘└─┘  └─┘└─┘└─┘               └───┘  └──┘└─┘└─┘  └─
 
-    uint16_t x = 0;
-    uint16_t y = 0;
-    pixel_active = framebuffer_active;
-    pixel_old = framebuffer_previous;
-    uint8_t state_clk;
-    uint8_t state_clk_last;
+    (void)gpio;
 
-    for (y = 0; y < DMG_PIXELS_Y; y++)
-    {
-        // wait for HSYNC edge to rise & fall
-        while (gpio_get(HSYNC_PIN) == 0);
-        while (gpio_get(HSYNC_PIN) == 1);
-        // Grab first pixel just after HYSNC goes low
-        read_pixel();
-        
-        // Get remaining pixels on each falling edge of the clock
-        x = 1;
-        state_clk = gpio_get(PIXEL_CLOCK_PIN);
-        state_clk_last = state_clk;
-        while (x < DMG_PIXELS_X)
-        {
-            state_clk = gpio_get(PIXEL_CLOCK_PIN);
-            if (state_clk == 0 && state_clk_last == 1)
-            {
-                read_pixel();
-                x++;
-            }
-            state_clk_last = state_clk;
-        }
-    }
+    // Handle VSYNC IRQ for video capture
+    video_capture_handle_vsync_irq(events);
 }
 
 static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, size_t buf_length, uint8_t line_index)
@@ -366,7 +387,7 @@ static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, siz
     {
         if (x == 0 && i == 0)
         {
-            *first_pixel = rgb888_to_rgb222( *((uint32_t*)color_scheme + *pbuff) ) ;
+            *first_pixel = color_convert(*((uint32_t*)color_scheme + *pbuff));
         }
         else
         {
@@ -387,7 +408,7 @@ static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, siz
             }
             else
             {
-                color = rgb888_to_rgb222( *((uint32_t*)color_scheme + *pbuff) ) ;
+                color = color_convert(*((uint32_t*)color_scheme + *pbuff));
             }
 
             *p16++ = color; 
@@ -400,12 +421,6 @@ static int32_t __no_inline_not_in_flash_func(single_scanline)(uint32_t *buf, siz
     if (pixel_count*VGA_MODE.xscale < VGA_MODE.width)
     {
         uint16_t remaining = (VGA_MODE.width - (pixel_count*VGA_MODE.xscale))/VGA_MODE.xscale;
-        
-        // //TESTING!!!
-        // while (remaining % 3 != 0)
-        // {
-        //     remaining++;
-        // }
 
         // RIGHT BORDER
         if (remaining > MIN_RUN)
@@ -507,8 +522,16 @@ static void initialize_gpio(void)
     // UART, for testing
     //stdio_init_all();
 
-#ifdef USE_NES_CONTROLLER
+#if USE_NES_CLASSIC_OR_WII
+    //Initialize I2C port at 400 kHz
+    i2c_init(i2cHandle, 400 * 1000);
 
+    // Initialize I2C pins
+    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
+    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
+    gpio_pull_up(SCL_PIN);
+    gpio_pull_up(SDA_PIN);
+#else
     /* NES Controller - start */
 
     /* Clock, normally HIGH */
@@ -526,15 +549,6 @@ static void initialize_gpio(void)
     gpio_set_dir(DATA_PIN, GPIO_IN);
 
     /* NES Controller - end */
-#else
-    //Initialize I2C port at 400 kHz
-    i2c_init(i2cHandle, 400 * 1000);
-
-    // Initialize I2C pins
-    gpio_set_function(SCL_PIN, GPIO_FUNC_I2C);
-    gpio_set_function(SDA_PIN, GPIO_FUNC_I2C);
-    gpio_pull_up(SCL_PIN);
-    gpio_pull_up(SDA_PIN);
 #endif
 
     gpio_init(DMG_OUTPUT_RIGHT_A_PIN);
@@ -560,48 +574,9 @@ static void initialize_gpio(void)
     gpio_set_dir(DMG_READING_BUTTONS_PIN, GPIO_IN);
 }
 
-static bool __no_inline_not_in_flash_func(nes_controller)(void)
-{
-    static uint32_t last_micros = 0;
-    uint32_t current_micros = time_us_32();
-    if (current_micros - last_micros < 20000)
-        return false;
 
-    last_micros = current_micros;
-
-    gpio_put(LATCH_PIN, 1);
-    sleep_us(5);
-    gpio_put(LATCH_PIN, 0);
-    sleep_us(1);
-    button_states[0] = gpio_get(DATA_PIN) ? BUTTON_STATE_UNPRESSED : BUTTON_STATE_PRESSED;
-    sleep_us(4);
-
-    for (uint i = 1; i < 8; i++) 
-    {
-        sleep_us(8);
-        gpio_put(PULSE_PIN, 0);
-        sleep_us(1);
-        gpio_put(PULSE_PIN, 1);
-        sleep_us(8);
-        button_states[i] = gpio_get(DATA_PIN) ? BUTTON_STATE_UNPRESSED : BUTTON_STATE_PRESSED;
-    }
-
-#ifdef DEBUG_BUTTON_PRESS
-    uint8_t buttondown = 0;
-    for (int i = 0; i < BUTTON_HOME; i++)
-    {
-        if (button_states[i] == BUTTON_STATE_PRESSED)
-        {
-            buttondown = 1;
-        }
-    }
-    gpio_put(ONBOARD_LED_PIN, buttondown);
-#endif
-
-    return true;
-}
-
-static bool __no_inline_not_in_flash_func(nes_classic_controller)(void)
+#if USE_NES_CLASSIC_OR_WII
+static bool __no_inline_not_in_flash_func(game_controller)(void)
 {
     static uint32_t last_micros = 0;
     uint32_t current_micros = time_us_32();
@@ -679,21 +654,59 @@ static bool __no_inline_not_in_flash_func(nes_classic_controller)(void)
         last_micros = time_us_32();
     }
 
-#ifdef DEBUG_BUTTON_PRESS
-    uint8_t buttondown = 0;
+    bool any_pressed = false;
     for (i = 0; i < BUTTON_COUNT; i++)
     {
         if (button_states[i] == BUTTON_STATE_PRESSED)
         {
-            buttondown = 1;
+            any_pressed = true;
         }
     }
-    gpio_put(ONBOARD_LED_PIN, buttondown);
-#endif
+    gpio_put(ONBOARD_LED_PIN, any_pressed);
 
     gpio_set_irq_enabled(VSYNC_PIN, GPIO_IRQ_EDGE_RISE, true);
     return true;
 }
+#else  // use old-school NES controller with shift register
+static bool __no_inline_not_in_flash_func(game_controller)(void)
+{
+    static uint32_t last_micros = 0;
+    uint32_t current_micros = time_us_32();
+    if (current_micros - last_micros < 20000)
+        return false;
+
+    last_micros = current_micros;
+
+    gpio_put(LATCH_PIN, 1);
+    sleep_us(5);
+    gpio_put(LATCH_PIN, 0);
+    sleep_us(1);
+    button_states[0] = gpio_get(DATA_PIN) ? BUTTON_STATE_UNPRESSED : BUTTON_STATE_PRESSED;
+    sleep_us(4);
+
+    for (uint i = 1; i < 8; i++) 
+    {
+        sleep_us(8);
+        gpio_put(PULSE_PIN, 0);
+        sleep_us(1);
+        gpio_put(PULSE_PIN, 1);
+        sleep_us(8);
+        button_states[i] = gpio_get(DATA_PIN) ? BUTTON_STATE_UNPRESSED : BUTTON_STATE_PRESSED;
+    }
+
+    bool any_pressed = false;
+    for (int i = 0; i < BUTTON_HOME; i++)
+    {
+        if (button_states[i] == BUTTON_STATE_PRESSED)
+        {
+            any_pressed = true;
+        }
+    }
+    gpio_put(ONBOARD_LED_PIN, any_pressed);
+
+    return true;
+}
+#endif
 
 static void __no_inline_not_in_flash_func(gpio_callback)(uint gpio, uint32_t events)
 {
@@ -765,83 +778,83 @@ static void __no_inline_not_in_flash_func(command_check)(void)
     if (time_us_32() < 5000000)
         return;
 
-    if (button_is_pressed(BUTTON_SELECT))
+#if USE_NES_CLASSIC_OR_WII
+    // On NES Classic or Wii, Home button toggles OSD
+    if (button_was_released(BUTTON_HOME))
     {
-        // select pressed
-        if (button_was_released(BUTTON_START))
-        {
-            OSD_toggle();
-        }
+        OSD_toggle();
     }
+#else
+    // For old-school NES controller, Select + Up together toggles OSD
+    if (button_is_pressed(BUTTON_SELECT) && button_was_released(BUTTON_UP))
+    {
+        OSD_toggle();
+    }
+#endif
     else
     {
-        // select not pressed
-
-        if (button_was_released(BUTTON_HOME))   
+        // For safety, make sure select is not being held
+        if (!button_is_pressed(BUTTON_SELECT) && OSD_is_enabled())
         {
-            OSD_toggle();
-        }
-        else
-        {
-            if (OSD_is_enabled())
+            if (button_was_released(BUTTON_DOWN))
             {
-                if (button_was_released(BUTTON_DOWN))
+                OSD_change_line(1);
+            }
+            else if (button_was_released(BUTTON_UP))
+            {
+                OSD_change_line(-1);
+            }
+            else if (button_was_released(BUTTON_RIGHT) 
+                    || button_was_released(BUTTON_LEFT)
+                    || button_was_released(BUTTON_A))
+            {
+                controller_button_t button = button_was_released(BUTTON_A) ? BUTTON_A : button_was_released(BUTTON_RIGHT) ? BUTTON_RIGHT : BUTTON_LEFT;
+                switch (OSD_get_active_line())
                 {
-                    OSD_change_line(1);
-                }
-                else if (button_was_released(BUTTON_UP))
-                {
-                    OSD_change_line(-1);
-                }
-                else if (button_was_released(BUTTON_RIGHT) 
-                        || button_was_released(BUTTON_LEFT)
-                        || button_was_released(BUTTON_A))
-                {
-                    controller_button_t button = button_was_released(BUTTON_A) ? BUTTON_A : button_was_released(BUTTON_RIGHT) ? BUTTON_RIGHT : BUTTON_LEFT;
-                    switch (OSD_get_active_line())
-                    {
-                        case OSD_LINE_COLOR_SCHEME:
-                            increase_color_scheme_index(button == BUTTON_LEFT ? -1 : 1);
-                            color_scheme = get_scheme();
+                    case OSD_LINE_COLOR_SCHEME:
+                        increase_color_scheme_index(button == BUTTON_LEFT ? -1 : 1);
+                        color_scheme = get_scheme();
+                        update_osd();
+                        break;
+                    case OSD_LINE_BORDER_COLOR:
+                        increase_border_color_index(button == BUTTON_LEFT ? -1 : 1);
+                        background_color = color_convert(get_background_color());
+                        update_osd();
+                        break;
+                    case OSD_LINE_FRAMEBLENDING:
+                        frameblending_enabled = !frameblending_enabled;
+                        update_osd();
+                        break;
+                    case OSD_LINE_RESET_GAMEBOY:
+                        gameboy_reset();
+                        break;
+                    case OSD_LINE_RESET_DEVICE:
+                        if (button == BUTTON_A)
+                        {
+                            reset_pico(restart_option);
+                        }
+                        else
+                        {
+                            restart_option = restart_option == RESTART_NORMAL ? RESTART_MASS_STORAGE : RESTART_NORMAL;
                             update_osd();
-                            break;
-                        case OSD_LINE_BORDER_COLOR:
-                            increase_border_color_index(button == BUTTON_LEFT ? -1 : 1);
-                            background_color = rgb888_to_rgb222(get_background_color());
-                            update_osd();
-                            break;
-                        case OSD_LINE_FRAMEBLENDING:
-                            frameblending_enabled = !frameblending_enabled;
-                            update_osd();
-                            break;
-                        case OSD_LINE_RESET_GAMEBOY:
-                            gameboy_reset();
-                            break;
-                        case OSD_LINE_RESET_DEVICE:
-                            if (button == BUTTON_A)
-                            {
-                                restart_rp2040(restart_option);
-                            }
-                            else
-                            {
-                                restart_option = restart_option == RESTART_NORMAL ? RESTART_MASS_STORAGE : RESTART_NORMAL;
-                                update_osd();
-                            }
-                            break;
-                        case OSD_LINE_SAVE_SETTINGS:
-                            save_and_restart();
-                            //update_osd(); // skip, since we're restarting 
-                            break;
-                        case OSD_LINE_EXIT:
+                        }
+                        break;
+                    case OSD_LINE_SAVE_SETTINGS:
+                        if (button == BUTTON_A)  
+                            save_settings();
+                        break;
+                    case OSD_LINE_EXIT:
+                        if (button == BUTTON_A)    
                             OSD_toggle();
-                            break;
-                    }
+                        break;
                 }
             }
+            else if (button_was_released(BUTTON_B))
+            {
+                OSD_toggle();
+            }
         }
-
-        
-    }
+    }       
     
     for (int i = 0; i < BUTTON_COUNT; i++) 
     {
@@ -867,7 +880,7 @@ static void update_osd(void)
     sprintf(buff, "RESET DEVICE:%5s", restart_option == RESTART_MASS_STORAGE ? "USB" : "NORM");
     OSD_set_line_text(OSD_LINE_RESET_DEVICE, buff);
 
-    OSD_set_line_text(OSD_LINE_SAVE_SETTINGS, "SAVE & RESTART");
+    OSD_set_line_text(OSD_LINE_SAVE_SETTINGS, "SAVE SETTINGS");
 
     OSD_set_line_text(OSD_LINE_EXIT, "EXIT");
 
@@ -894,32 +907,29 @@ static void gameboy_reset(void)
     gpio_put(GAMEBOY_RESET_PIN, 1);
 }
 
-static void save_and_restart(void)
+static void save_settings(void)
 {
+    (void)EEPROM_write(SAVE_INDEX_SCHEME, get_scheme_index());
+    (void)EEPROM_write(SAVE_INDEX_BORDER, get_border_color_index());
+    (void)EEPROM_write(SAVE_INDEX_FRAME_BLENDING, frameblending_enabled ? 1 : 0);
+
     enable_core1(false);
-    EEPROM_write(SAVE_INDEX_SCHEME, get_scheme_index());
-    EEPROM_write(SAVE_INDEX_BORDER, get_border_color_index());
-    EEPROM_write(SAVE_INDEX_FRAME_BLENDING, frameblending_enabled ? 1 : 0);
-
-    bool ret = EEPROM_commit();
-
-    // Restart device
-    restart_rp2040(RESTART_NORMAL);
+    (void)EEPROM_commit();
+    enable_core1(true);
 }
 
-#define AIRCR_Register (*((volatile uint32_t*)(PPB_BASE + 0x0ED0C)))
-static void restart_rp2040(restart_option_t restart_option)
+static void reset_pico(restart_option_t restart_option)
 {
-    enable_core1(false);
-
     if (restart_option == RESTART_NORMAL)
     {
-        // Reset the RP2040
-        AIRCR_Register = 0x05FA0004;
+        // Reset the Pico
+        printf("Resetting Pico...\n");
+        watchdog_reboot(0, 0, 0);
     }
     else
     {
-        // Reset the RP2040 into USB boot mode
+        // Reset into USB boot mode
+        printf("Resetting Pico into USB boot mode...\n");
         reset_usb_boot(0, DISABLE_MASK_NONE);
     }
 
@@ -931,11 +941,15 @@ static void restart_rp2040(restart_option_t restart_option)
 
 static void load_settings(void)
 {
-    enable_core1(false);
-    set_scheme_index((int)EEPROM_read(SAVE_INDEX_SCHEME));
-    set_border_color_index((int)EEPROM_read(SAVE_INDEX_BORDER));
-    frameblending_enabled = EEPROM_read(SAVE_INDEX_FRAME_BLENDING) == 1;
-    enable_core1(true);
+    uint8_t scheme_index;
+    (void)EEPROM_read(SAVE_INDEX_SCHEME, &scheme_index);
+    set_scheme_index((int)scheme_index);
+    uint8_t border_color_index;
+    (void)EEPROM_read(SAVE_INDEX_BORDER, &border_color_index);
+    set_border_color_index((int)border_color_index);
+    uint8_t frame_blending;
+    (void)EEPROM_read(SAVE_INDEX_FRAME_BLENDING, &frame_blending);
+    frameblending_enabled = frame_blending == 1;
 }
 
 static void enable_core1(bool enable)
@@ -973,9 +987,41 @@ static void enable_core1(bool enable)
     }
 }
 
-static void read_pixel(void)
+static void apply_packed_frame(const uint8_t* packed_frame)
 {
-    uint8_t new_value = (gpio_get(DATA_0_PIN) << 1) + gpio_get(DATA_1_PIN);
-    *pixel_active++ = frameblending_enabled ? (new_value == 0 ? new_value|*pixel_old : new_value) : new_value;
-    *pixel_old++ = new_value > 0 ? 2 : 0;   // To brighten up the previous frame
+    uint16_t pixel_index = 0;
+
+    for (size_t packed_index = 0; packed_index < PACKED_FRAME_SIZE && pixel_index < DMG_PIXEL_COUNT; packed_index++)
+    {
+        uint8_t packed_pixels = packed_frame[packed_index];
+
+        for (uint8_t pixel = 0; pixel < 4 && pixel_index < DMG_PIXEL_COUNT; pixel++)
+        {
+            uint8_t shift = (uint8_t)((3u - pixel) * 2u);
+            uint8_t new_value = (packed_pixels >> shift) & 0x03u;
+
+            framebuffer_active[pixel_index] = frameblending_enabled
+                ? (new_value == 0 ? (uint8_t)(new_value | framebuffer_previous[pixel_index]) : new_value)
+                : new_value;
+            framebuffer_previous[pixel_index] = new_value > 0 ? 2 : 0;
+            pixel_index++;
+        }
+    }
 }
+
+static uint16_t color_convert(uint32_t color)
+{
+#if USE_RGB332_PCB
+    return rgb888_to_rgb332(color);
+#else
+    return rgb888_to_rgb222(color);
+#endif
+}
+
+#ifdef TEST_MARIO_FRAMEBUFFER
+static void load_test_framebuffer(void)
+{
+    frameblending_enabled = false;
+    apply_packed_frame(mario_packed_160x144);
+}
+#endif
