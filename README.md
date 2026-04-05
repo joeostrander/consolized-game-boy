@@ -271,7 +271,14 @@ element14 Community pages:
 
 - Andy West for the original concept and code
 - Joe Ostrander for the later firmware, hardware, controller, OSD, flash-save, scaling, and newer DVI work in this repo
-- Markeno for the link port PCB mod
+- Markeno for the link port PCB motherboard design addition
+- Supertazon for waterslide logo and help on frameblending
+- other members of element14 community that I've forgot
+
+## See also
+
+- [PicoDVI-DMG](https://github.com/joeostrander/PicoDVI-DMG)
+- [PicoDVI-DMG_EMU](https://github.com/joeostrander/PicoDVI-DMG_EMU) - Emulator version
 
 ## Contact
 For questions or collaboration, reach me at:  
